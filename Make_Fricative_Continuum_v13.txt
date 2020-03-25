@@ -397,7 +397,7 @@ procedure makeContinuumValues
 		## uses the Hz to Bark conversion from Traunmuller (1990); 
 			## Hz to bark: 26.81/(1+(1960/f)) - 0.53
 			## bark to Hz: f = 1960 / [26.81 / (z + 0.53) - 1]
-			# H. Traunmüller (1990) "Analytical expressions for the tonotopic sensory scale" 
+			# H. TraunmÃ¼ller (1990) "Analytical expressions for the tonotopic sensory scale" 
 			# J. Acoust. Soc. Am. 88: 97-100. 
 		bark'n'Start = 26.81/(1+(1960/peak'n'Start)) - 0.53
 		bark'n'End = 26.81/(1+(1960/peak'n'End)) - 0.53

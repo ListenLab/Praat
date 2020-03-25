@@ -1,0 +1,31 @@
+clearinfo
+
+# ask the user to select the sounds they want to use
+pause select all sounds to be used for this operation
+number_of_selected_sounds = numberOfSelected ("Sound")
+
+# Assign an object number to each of those sounds
+for index to number_of_selected_sounds
+	sound'index' = selected("Sound",index)
+endfor
+
+# Loop through the sounds
+for current_sound_index from 1 to number_of_selected_sounds
+    select sound'current_sound_index'
+	name$ = selected$("Sound")
+
+    ## Do your stuff here 
+    # hint: utilize the 'Paste History' function
+        
+    # for example: display all intensities
+    	#int = Get intensity (dB)
+    	#print 'name$''tab$''int:2''newline$'
+
+
+endfor
+
+#Re-select the sounds
+select sound1
+for current_sound_index from 2 to number_of_selected_sounds
+    plus sound'current_sound_index'
+endfor

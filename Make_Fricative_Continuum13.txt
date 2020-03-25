@@ -1,0 +1,537 @@
+# # ## ### ##### ######## ############# ##################### ##################################
+# Create synthetic fricative continuum
+# version 13
+# by Matthew B. Winn
+# January 2020
+#
+# this script filters  white noise to create fricatives according to the dimensions that you specify
+# frequency interpolation can be linear, logarithmic, Bark scale, or Greenwood (cochlear spacing)
+# 
+# # ## ### ##### ######## ############# ##################### ##################################
+
+form Input Enter specifications for Fricative continuum settings
+comment Enter parameter levesl for continuum endpoints in the Left and Right columns
+
+    optionmenu steps: 7
+       option 2
+       option 3
+       option 4
+       option 5
+       option 6
+       option 7
+       option 8
+       option 9
+       option 10       
+       option 11
+       option 12
+       option 13
+       option 14
+       option 15
+
+#comment PEAK FREQUENCIES
+	real left_peak1 2300
+	real right_peak1End 3700
+
+	real left_peak2 3100
+	real right_peak2End 5100
+
+	real left_peak3 5100
+	real right_peak3End 6700
+
+optionmenu interpolation: 2
+       option Linear interpolation
+       option Logarithmic interpolation
+       option Use Greenwood function
+       option Use Bark scale
+
+comment BANDWIDTHS (slope in dB / octave)
+	real left_bw1 36
+	real right_bw1End 56
+	real left_bw2 28
+	real right_bw2End 48
+	real left_bw3 48
+	real right_bw3End 48
+
+
+comment RELATIVE AMPLITUDES (relative to second peak)
+	integer left_amp1 5
+	integer right_amp1End -13
+
+	integer left_amp3 -6
+	integer right_amp3End -5
+
+
+#comment fricative duration, rise time and fall time
+	real left_duration 200
+	real right_durationEnd 200
+
+	real left_risetime 150
+	real right_risetimeEnd 150
+
+	real left_falltime 40
+	real right_falltimeEnd 40
+
+	real left_intensity 70
+	real right_intensityEnd 70
+	
+#comment filename prefix for steps and full items w/vowels: 
+	sentence left_prefix Step_
+	sentence right_fullPrefix VowelName_
+
+#comment append fricative to another soundfile in the list?
+    optionmenu append: 2
+       option No - create isolated fricatives
+       option Yes -  fricative at the beginning
+       option Yes - friative at the end
+
+    optionmenu samplerate: 1
+       option 44100 Hz
+       option 22050 Hz
+       option 16000 Hz
+
+     boolean draw 1
+endform
+
+
+#
+#
+##
+###
+#####
+########
+#############
+#####################
+##################################
+# First, convert variables from form,
+# and establish some other variables;
+# scroll to the bottom of the script for details
+call convertVariables
+
+call makeContinuumValues
+
+# Make the continuum
+for thisStep from 1 to steps
+# first, lookup the relevant continuum values 
+   call assignVariableLevels
+	# yields: peak1, peak2, peak3, bw1, bw2, bw3, 
+	# yields: amp1, amp2, amp3
+	# yields: duration, risetime, falltime, intensity 
+
+   # create broadband noise to filter
+      	Create Sound from formula... Noise 1 0 duration samplerate randomGauss(0,0.1)
+
+   for thisPeak from 1 to numpeaks
+	select Sound Noise
+	temp_int = Get intensity (dB)
+	# adjust the intensity for this peak
+	new_int = temp_int + amp'thisPeak'
+	Copy... Noise_temp
+	Scale intensity... new_int		
+
+	# filter the sound around the center frequency
+	    call filterOctaveRolloff Noise_temp peak'thisPeak' bw'thisPeak' 'prefix$''thisStep'_peak'thisPeak'
+
+	# cleanup temp
+		select Sound Noise_temp
+		Remove
+
+	# create exponential curve for amplitude envelope
+	# power by which cosine envelope is shaped is detemined 
+	# by which peak is being modulated;
+	# higher peaks have slightly slower-onset envlopes
+	   power = 0.5+(thisPeak/2)
+	   call applyEnvelope "'prefix$''thisStep'_peak'thisPeak'" risetime falltime power
+
+   endfor
+
+   # put all the peaks together
+   	call blend3Peaks "'prefix$''thisStep'_peak1" "'prefix$''thisStep'_peak2" "'prefix$''thisStep'_peak3" 'prefix$''thisStep'
+
+   # scale the final intensity of this continuum step
+   # (intensity determined from assignVariableLevels procedure)
+   	call scaleIntensity "'prefix$''thisStep'" intensity
+
+   # cleanup
+   	call removePeakFiles
+endfor
+
+# attach the vowel, if necessary
+   if append > 0
+	call appendVowel
+   endif
+
+# draw pretty pictures
+   if draw = 1
+	call drawSpectra
+   endif
+
+
+# disable saving for now
+# (You can alway manually save it)
+#call saveInfoWindow "'outDirectory$'" Continuum_info
+
+##################################
+#####################
+#############
+########
+#####
+###
+##
+#
+#
+procedure filterOctaveRolloff .name$ .cf .rolloff.per.octave .newname$
+   select Sound '.name$'
+   Filter (formula)...  if x > 1 then self*10^(-(abs((log10(x/.cf)/log10(2)))*.rolloff.per.octave)/20) else self fi
+   Rename... '.newname$'
+endproc
+
+procedure drawSpectra
+   Erase all
+   select Sound 'prefix$'1
+   for thisFricative from 2 to steps
+	plus Sound 'prefix$''thisFricative'
+   endfor
+   
+   numberOfSelectedSounds = numberOfSelected ("Sound")
+   
+   for thisSelectedSound to numberOfSelectedSounds
+   	sound'thisSelectedSound' = selected("Sound",thisSelectedSound)
+   endfor
+   
+   for thisSound from 1 to numberOfSelectedSounds
+      coolgradient = ('thisSound'-1)/('numberOfSelectedSounds'-1)
+   	r = coolgradient
+   	g = 0.0
+   	b = 1-coolgradient
+      Colour... {'r','g','b'}
+   
+      select sound'thisSound'
+   	name$ = selected$("Sound")
+   	To Spectrum... yes
+   	Cepstral smoothing... 'smoothing'
+   	Rename... 'name$'_smooth
+   	select Spectrum 'name$'
+   	Remove
+   	select Spectrum 'name$'_smooth
+   	Draw... drawHzLow drawHzHigh drawDBLow drawDBHigh yes
+   	select Spectrum 'name$'_smooth
+   	Remove
+   endfor
+   
+   # x-axis (frequency) labels
+      Marks bottom every: 1, 1000, "yes", "yes", "no"
+
+endproc
+
+procedure saveInfoWindow outputDirectory$ outputFileName$
+	# first delete the file if it already exists
+	   filedelete 'outputDirectory$'/'outputFileName$'.txt
+	# create the file
+	   fappendinfo 'outputDirectory$'/'outputFileName$'.txt
+endproc
+
+procedure getVowelInfo
+	if append = 0
+		#take no action
+		print 'newline$'
+		numchannels = 1
+	else
+		#pause Select the soundfile to combine with the fricatives
+		vowel$ = selected$("Sound")
+		numchannels = Get number of channels
+		v_samplerate = Get sampling frequency
+		print 'vowel$' was used as the vowel'newline$'
+
+	endif
+endproc
+
+procedure appendVowel
+pause select all vowels to add
+   numberOfSelectedSounds = numberOfSelected ("Sound")
+   
+   for thisSelectedSound to numberOfSelectedSounds
+   	vowel'thisSelectedSound' = selected("Sound",thisSelectedSound)
+   endfor
+   
+   for thisVowel from 1 to numberOfSelectedSounds
+	select vowel'thisVowel'
+	call getVowelInfo
+	vowel$ = selected$("Sound")
+
+	if append = 0
+		#take no action
+		print 'newline$'
+	elsif append = 1
+		select Sound 'vowel$'
+		Convert to mono
+		Resample... samplerate 50
+		Rename... vowel2
+		for thisFricative from 1 to steps
+		    select Sound 'prefix$''thisFricative'
+		    plus Sound vowel2
+		    Concatenate
+			# use this line for a simple filename
+			# Rename... 'fullPrefix$''thisFricative'
+			# use this line instead to maintain the original vowel filename in the ultimate name
+			  Rename... 'prefix$''thisFricative'_'vowel$'
+		endfor
+		select Sound vowel2
+		plus Sound 'vowel$'_mono
+		Remove
+
+	elsif append = 2
+	    for thisFricative from 1 to steps
+		select Sound 'vowel$'
+		Convert to mono
+		Resample... samplerate 50
+		Rename... vowel2
+		
+		select Sound 'prefix$''thisFricative'
+		Copy... Fricative2
+		
+		select Sound vowel2
+		plus Sound Fricative2
+		Concatenate
+			# use this line for a simple filename
+			# Rename... 'fullPrefix$''thisFricative'
+			# use this line instead to maintain the original vowel filename in the ultimate name
+			   Rename... 'prefix$''thisFricative'_'vowel$'
+
+		select Sound Fricative2
+		plus Sound vowel2
+		plus Sound 'vowel$'_mono
+		Remove
+	    endfor
+	endif
+    endfor
+endproc
+
+procedure removePeakFiles
+	select Sound 'prefix$''thisStep'_peak1
+	plus Sound 'prefix$''thisStep'_peak2
+	plus Sound 'prefix$''thisStep'_peak3
+	plus Sound Noise
+	Remove
+endproc
+
+procedure scaleIntensity .name$ .intensity
+	select Sound '.name$'
+	Scale intensity... '.intensity'
+endproc
+
+procedure applyEnvelope .name$ .risetime .falltime .power
+	select Sound '.name$'
+	.start = Get start time
+	.end = Get end time
+	Formula... if x<('.risetime')  
+		...then self * ((cos((x-('.risetime' - '.start'))/'.risetime' * pi/2))^'.power')
+		...else self endif  
+	endif
+	
+	Formula... if x>('.end' - '.falltime')  
+		...then self * cos((x-(.end - '.falltime'))/'.falltime' * pi/2)
+		...else self endif
+	endif
+endproc
+
+
+procedure blend3Peaks .sound1$ .sound2$ .sound3$ .newname$
+	select Sound '.sound1$'
+	Copy... '.newname$'
+	Formula... self [col] + Sound_'.sound2$' [col] + Sound_'.sound3$' [col]
+endproc
+
+
+procedure assignVariableLevels
+	for thisPeak from 1 to numpeaks
+	    peak'thisPeak' = peak'thisPeak'_'thisStep'
+	    bw'thisPeak' = bw'thisPeak'_'thisStep'
+	    amp'thisPeak' = amp'thisPeak'_'thisStep'
+	endfor
+
+	duration = duration'thisStep'
+	risetime = risetime'thisStep'
+	falltime = falltime'thisStep'
+	intensity = intensity'thisStep'
+endproc
+
+procedure makeContinuumValues
+   clearinfo
+   if steps >1
+    for n from 1 to numpeaks
+    # navigate among four different interpolation types
+	if interpolation = 1; linear
+		call makeContinuum0dec steps peak'n'Start peak'n'End "peak'n'_" yes
+
+	elsif interpolation = 2; logarithmic
+	   peak'n'Start = log10(peak'n'Start)
+	   peak'n'End = log10(peak'n'End)
+	   call makeContinuum3dec steps peak'n'Start peak'n'End "peak'n'_" no
+	   for .thisLogStep from 1 to steps
+		peak'n'_'.thisLogStep' = 10^(peak'n'_'.thisLogStep')
+		tempvariable = peak'n'_'.thisLogStep'
+		print peak'n'_'.thisLogStep''tab$''tempvariable:0''newline$'
+	   endfor
+	print 'newline$'
+
+	elsif interpolation = 3;Greenwood
+	    # cochlea parameters
+		aA = 165.4
+		a = 2.1
+		length = 35
+		k = 0.88
+
+		apicalCochlearPositionPeak'n' = log10((peak'n'Start/'aA')+'k')*'length'/'a'
+		basalCochlearPositionPeak'n' = log10((peak'n'End/'aA')+'k')*'length'/'a'
+
+		call makeContinuum3dec steps apicalCochlearPositionPeak'n' basalCochlearPositionPeak'n' "cochlearPosition'n'_" no
+
+	    for .thisGreenwoodStep from 1 to steps
+		  peak'n'_'.thisGreenwoodStep' = 'aA'*((10^('a'*cochlearPosition'n'_'.thisGreenwoodStep'/'length'))-'k')
+			tempvariable = peak'n'_'.thisGreenwoodStep'
+		  print peak'n'_'.thisGreenwoodStep''tab$''tempvariable:0''newline$'
+	    endfor
+		print 'newline$'
+
+	elsif interpolation = 4; Use Bark scale
+		## uses the Hz to Bark conversion from Traunmuller (1990); 
+			## Hz to bark: 26.81/(1+(1960/f)) - 0.53
+			## bark to Hz: f = 1960 / [26.81 / (z + 0.53) - 1]
+			# H. Traunmüller (1990) "Analytical expressions for the tonotopic sensory scale" 
+			# J. Acoust. Soc. Am. 88: 97-100. 
+		bark'n'Start = 26.81/(1+(1960/peak'n'Start)) - 0.53
+		bark'n'End = 26.81/(1+(1960/peak'n'End)) - 0.53
+
+		call makeContinuum3dec steps bark'n'Start bark'n'End "barkPeak'n'_" no
+
+		for .thisBarkStep from 1 to steps
+			peak'n'_'.thisBarkStep' = 1960 / (26.81 / (barkPeak'n'_'.thisBarkStep' + 0.53) - 1)
+
+			tempvariable = peak'n'_'.thisBarkStep'
+			print peak'n'_'.thisBarkStep''tab$''tempvariable:0''newline$'
+		endfor
+		print 'newline$'
+	endif
+    endfor
+
+	for n from 1 to numpeaks
+		call makeContinuum3dec steps bw'n'Start bw'n'End "bw'n'_" yes
+	endfor
+
+	for n from 1 to numpeaks
+		call makeContinuum3dec steps amp'n'Start amp'n'End "amp'n'_" yes
+	endfor
+   endif
+
+   # establish continuum values and print them to the info window
+	call makeContinuum3dec steps durationStart durationEnd duration 1
+
+	call makeContinuum3dec steps risetimeStart risetimeEnd risetime 1
+
+	call makeContinuum3dec steps falltimeStart falltimeEnd falltime 1
+
+	call makeContinuum3dec steps intensityStart intensityEnd intensity 1
+endproc
+
+procedure makeContinuum0dec .steps .low .high .prefix$ .printvalues
+	for thisStep from 1 to .steps
+	# calculate the value
+	   temp = (('thisStep'-1)*('.high'-'.low')/('.steps'-1))+'.low'
+
+	# assign the value to a variable name specified by the procedure arguments
+	   '.prefix$''thisStep' = temp
+		#.value = step_'.prefix$''thisStep'
+	.value = '.prefix$''thisStep'
+	if .printvalues = 1
+	print '.prefix$''thisStep''tab$''.value:0' 'newline$'
+	endif
+
+	endfor
+	print 'newline$'
+endproc
+
+procedure makeContinuum3dec .steps .low .high .prefix$ .printvalues
+	for thisStep from 1 to .steps
+
+	temp = (('thisStep'-1)*('.high'-'.low')/('.steps'-1))+'.low'
+
+	'.prefix$''thisStep' = temp
+	
+	.value = '.prefix$''thisStep'
+	if .printvalues = 1
+	print '.prefix$''thisStep''tab$''.value:3' 'newline$'
+	endif
+
+	endfor
+	print 'newline$'
+endproc
+
+procedure convertVariables
+	yes = 1
+	no = 0
+	numpeaks = 3
+	# add one to the steps variable since the 'first' option is 2
+	steps = steps+1
+	#-----------------------
+	peak1Start = left_peak1
+	peak1End = right_peak1End
+	peak2Start = left_peak2
+	peak2End = right_peak2End
+	peak3Start = left_peak3
+	peak3End = right_peak3End
+	#-----------------------
+	bw1Start = left_bw1
+	bw1End = right_bw1End
+	bw2Start = left_bw2
+	bw2End = right_bw2End
+	bw3Start = left_bw3
+	bw3End = right_bw3End
+	#-----------------------
+	amp1Start = left_amp1
+	amp1End = right_amp1End
+	amp3Start = left_amp3
+	amp3End = right_amp3End
+	amp2Start = 0
+	amp2End = 0
+	temporaryintensity = 50
+	#-----------------------
+	# convert ms to seconds
+	durationStart = left_duration/1000
+	durationEnd = right_durationEnd/1000
+	#-----------------------
+	# convert ms to seconds
+	risetimeStart = left_risetime/1000
+	risetimeEnd = right_risetimeEnd/1000
+	falltimeStart = left_falltime/1000
+	falltimeEnd = right_falltimeEnd/1000
+	#-----------------------
+	intensity = left_intensity
+	intensityStart = left_intensity
+	intensityEnd =  right_intensityEnd
+	#-----------------------
+	prefix$ = "'left_prefix$'"
+	fullPrefix$ = "'right_fullPrefix$'"
+	#-----------------------
+	append = append-1
+	##### 0 means no vowel/word to append
+	##### 1 means fricative comes first
+	##### 2 means fricative comes second
+	#-----------------------
+	# options for drawing spectra
+	smoothing = 300
+	drawHzLow = 0
+	drawHzHigh = 10000
+	drawDBLow = 5
+	drawDBHigh = 40
+
+	# these options will be overridden if you select a vowel to concatenate (so that both the vowel and fricative have the same samplerate)
+		# so... only concern these if you are creating isolated fricatives. 
+	if samplerate = 1
+		samplerate = 44100
+	elsif samplerate = 2
+		samplerate = 22050
+	else
+		samplerate = 16000
+	endif
+endproc
+

@@ -1,0 +1,75 @@
+## Draw gradient-colored spectra from many selected sounds
+#
+# smoothing: cepstral smoothing to smooth out the spectra
+# drawHzLow = left edge of frequency axis
+# drawHzHigh = left edge of frequency axis
+# drawDBLow = bottom edge of y axis
+# drawDBHigh = bottom edge of y axis
+
+# Cepstral smoothing: higher number for smoother spectra
+#    (but beware of losing details)
+smoothing = 300 
+
+# X-axis (frequency) limits
+drawHzLow = 0
+drawHzHigh = 8000
+
+# Y-axis (Intensity) limits
+drawDBLow = -5
+drawDBHigh = 40
+
+# Erase the current picture window
+Erase all
+
+# Ask the user to select the sounds they want to use
+pause select all sounds to be used for this operation
+   numberOfSelectedSounds = numberOfSelected ("Sound")
+
+# Assign an object number to each of those selections
+for thisSelectedSound to numberOfSelectedSounds
+	sound'thisSelectedSound' = selected("Sound",thisSelectedSound)
+endfor
+
+# loop through the sounds
+for thisSound from 1 to numberOfSelectedSounds
+
+   # Determine the amount of RED in the color
+   #  (it starts at zero red)
+   # and then determine the amount of BLUE
+   #   (as the inverse of the red)
+   redgradient = ('thisSound'-1)/('numberOfSelectedSounds'-1)
+	r = redgradient
+	g = 0.0
+	b = 1-redgradient
+   # set the color 
+   Colour... {'r','g','b'}
+
+   select sound'thisSound'
+	name$ = selected$("Sound")
+	
+	# Make the spectrum
+	To Spectrum... yes
+	
+	# Smooth the spectrum
+	Cepstral smoothing... 'smoothing'
+	Rename... 'name$'_smooth
+	
+	# Remove the original spectrum object
+	select Spectrum 'name$'
+	Remove
+
+	# Draw the smoothed spectrum
+	select Spectrum 'name$'_smooth
+	Draw... drawHzLow drawHzHigh drawDBLow drawDBHigh yes
+	select Spectrum 'name$'_smooth
+	Remove
+ 
+endfor
+
+# Re-select the sounds
+# (useful if you need to continue running this script 
+#   on the same set of sounds)
+   select sound1
+for thisSound from 2 to numberOfSelectedSounds
+   plus sound'thisSound'
+endfor

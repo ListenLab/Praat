@@ -1,0 +1,90 @@
+# List the values of a spectrum
+# in multiple sounds that you select
+#
+# also with an option to combine all the data 
+# into one table
+
+clearinfo
+
+# Ask the user to select the sounds they want to use
+pause select all sounds to be used for this operation
+number_of_selected_sounds = numberOfSelected ("Sound")
+
+# Assign an object number to each of those sounds
+for index to number_of_selected_sounds
+	sound'index' = selected("Sound",index)
+endfor
+
+# Loop through the sounds
+for current_sound_index from 1 to number_of_selected_sounds
+    select sound'current_sound_index'
+	name$ = selected$("Sound")
+	
+	# Assign it to a vector of names
+	# to call up later
+	names$['current_sound_index'] = name$
+
+    ## Do your stuff here 
+	To Spectrum: "yes"
+	Tabulate: "no", "yes", "no", "no", "no", "yes"
+
+    ## Insert the object name into the first column
+	selectObject: "Table 'name$'"
+	Insert column: 1, "name"
+	num_rows = Get number of rows
+	for row_index from 1 to num_rows
+	   Set string value: row_index, "name", name$
+	endfor
+	
+   ## Make better column names
+	Set column label (label): "freq(Hz)", "Frequency"
+	Set column label (label): "pow(dB/Hz)", "Intensity"
+
+	select Spectrum 'name$'
+	Remove
+endfor
+
+if number_of_selected_sounds > 1
+
+# Ask the user if they want to combine all spectra into one single table
+beginPause ("Combine?")
+comment ("Combine all the spectra into a single table?")
+combine_into_single_table = endPause ("Cancel", "YES","NO", 2, 2)
+
+if combine_into_single_table == 2
+# a fake line to initiate the selection of objects
+	nocheck select mongoose
+
+# Loop through the sounds
+for current_sound_index from 1 to number_of_selected_sounds
+    name_string$ = names$['current_sound_index']
+    plus Table 'name_string$'
+
+endfor
+
+Append
+Rename: "All_spectra"
+
+
+# Delete the separate objects
+# a fake line to initiate the selection of objects
+	first_Table$ = names$[1]
+	select Table 'first_Table$'
+# Loop through the sounds
+for current_sound_index from 2 to number_of_selected_sounds
+    name_string$ = names$['current_sound_index']
+    plus Table 'name_string$'
+endfor
+Remove
+
+
+endif
+
+# Note: if you're comfortable with scripting,
+# you can automatically save the big table 
+# with a line like this:
+# Save as comma-separated file: "C:\Users\Matt\Sounds\All_my_sounds.Spectrum"
+
+
+# end conditional only if there were multiple tables
+endif

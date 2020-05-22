@@ -81,7 +81,7 @@ convert_spectrogram_to_df <- function(spect_name){
 
 constrain_dynamic_range <- function(spectrogram_object, 
                                     column = "Level", 
-                                    upper_limit = 91,
+                                    upper_limit = 120,
                                     dynamic_range = 60){
   # Here's how to constrain dynamic range
   # with reference to the highest value

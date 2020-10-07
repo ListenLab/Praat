@@ -1,0 +1,201 @@
+procedure get_envelope_TFS_chunks .name$
+#>> Decompose a sound 
+#>> into its temporal fine structure and envelope
+#>> (Hilbert transform)
+#>>
+#>> This version operates in "chunks" of 32768 samples
+#>> because anything more than that seriously slows down processing speed. 
+#>> This procedure is a split-apply-combine wrapper
+#>> for the basic Hilbert function;
+#>> Operate on those chunks and then re-concatenate the chunks.
+#
+# Some code from He and Dellwo (2016) Interspeech
+#
+#>> 
+#>> Example:
+# call get_envelope_TFS 'sound$'
+# yields 'sound$'_ENV
+# which is the envelope of the sound
+# and 'sound$'_TFS
+# which is the temporal fine structure
+#
+# To get the envelope with classical definition
+# (fluctuations slower than 50 Hz):
+# select Sound 'sound$'_ENV
+# Filter (pass Hann band): 0, 50, 5
+#
+# To express the classical envelope in dB instead of voltage:
+# select Sound 'sound$'_ENV
+# Filter (pass Hann band): 0, 50, 5
+# Copy: "Voice_source_ENV_band_dB"
+# # the important part:
+# Formula: "20 * log10(self[col]/0.0002)"
+#
+# take the envelope and perform a FFT,
+# then look in the frequencies below 64 Hz. 
+################################################
+
+	# Get sound info to be used later
+		select Sound '.name$'
+		.duration = Get total duration
+		.samplerate = Get sampling frequency
+
+	# divide into 32768-sample chunks 
+	# to facilitate faster Hilbert transform
+		call divide_32768 '.name$'
+
+	# figure out how many chunks were created
+		num_chunks = divide_32768.chunks_analyzed
+	
+	# Hilbert transform for each successive chunk
+		for sound_part from 1 to num_chunks
+			call get_envelope_TFS '.name$'_part_'sound_part'
+		endfor
+	
+	# Sequence the TFSs back together into one sound
+		nocheck select junk
+		for sound_part from 1 to num_chunks
+			plus Sound '.name$'_part_'sound_part'_TFS
+		endfor
+		Override sampling frequency: .samplerate
+		Concatenate
+		Rename... junk
+		Extract part: 0, .duration, "rectangular", 1, "no"
+		Rename... '.name$'_TFS
+		select Sound junk
+		Remove
+	
+	# Sequence the ENVs back together into one sound
+		nocheck select junk
+		for sound_part from 1 to num_chunks
+		   	plus Sound '.name$'_part_'sound_part'_ENV
+		endfor
+		Override sampling frequency: .samplerate
+		Concatenate
+		Rename... junk
+		Extract part: 0, .duration, "rectangular", 1, "no"
+		Rename... '.name$'_ENV
+		select Sound junk
+	   	Remove
+	
+	# Cleanup
+		nocheck select junk
+		for sound_part from 1 to num_chunks
+			plus Sound '.name$'_part_'sound_part'
+			plus Sound '.name$'_part_'sound_part'_TFS
+			plus Sound '.name$'_part_'sound_part'_ENV
+		endfor
+		Remove
+endproc
+
+
+procedure divide_32768 .name$
+#>> Divide a sound into chunks lasting no more than 32768 samples
+#>> so that they fit within a 16-bit memory framework.
+#>> Note how 2^15 is 32768
+################################################
+
+	select Sound '.name$'
+	samplerate = Get sampling frequency
+	duration = Get total duration
+	num_samples = Get number of samples
+
+	samples_collected = 0
+	.chunks_analyzed = 0
+	sample_start = 0
+	while samples_collected < num_samples
+
+		sample_end = sample_start + 32768
+		time_start = Get time from sample number: sample_start
+		time_end = Get time from sample number: sample_end
+
+		selectObject: "Sound '.name$'"
+		Extract part: time_start, time_end, "rectangular", 1, "no"
+
+		samples_collected = samples_collected + 32768
+		.chunks_analyzed = .chunks_analyzed + 1
+		sample_start = sample_start + 32769
+
+		# Optional printing of the timepoints of each chunk
+		#print chunk '.chunks_analyzed' 'time_start:3' 'time_end:3''newline$'
+
+		Rename... '.name$'_part_'.chunks_analyzed'
+
+	endwhile
+
+endproc
+
+
+procedure get_envelope_TFS .name$
+#>> Decompose a sound 
+#>> into its temporal fine structure and envelope
+#>> (Hilbert transform)
+#>>
+#>> NOTE that the actual envelope encoded by the auditory system
+#>> is not the envelope of the full waveform, but rather the envelope
+#>> of a single auditory filter.
+#>> so if you want a realistic envelope that woudl be represented
+#>> by the auditory system, then you'll want to filter 
+#>> into ERB-type bands first, 
+#>> then run this procedure on each of those bands. 
+#
+# Some code from He and Dellwo (2016) Interspeech
+#
+#>> Example:
+# call get_envelope_TFS 'sound$'
+# yields 'sound$'_ENV
+# which is the envelope of the sound
+# and 'sound$'_TFS
+# which is the temporal fine structure
+#
+#>> Example:
+# call get_envelope_TFS 'sound$'
+# yields 'sound$'_ENV
+# which is the envelope of the sound
+# and 'sound$'_TFS
+# which is the temporal fine structure
+#
+#>> To get the envelope with classical definition
+# (fluctuations slower than 50 Hz):
+# select Sound 'sound$'_ENV
+# Filter (pass Hann band): 0, 50, 5
+#
+#>> To express the classical envelope in dB instead of voltage:
+# select Sound 'sound$'_ENV
+# Filter (pass Hann band): 0, 50, 5
+# Copy: "Voice_source_ENV_band_dB"
+# # the important part:
+# Formula: "20 * log10(self[col]/0.0002)"
+#
+#>> To get modulation spectrum,
+# take the envelope and perform a FFT,
+# then look in the frequencies below 64 Hz. 
+################################################
+
+  select Sound '.name$'
+
+	# 1: Time-domain to frequency-domain conversion (DFT)
+	  spectrum = To Spectrum: "no"
+	  #spectrum = To Spectrum: fast_spectrum$
+	  Rename: "original"
+
+	# 2: Hilbert transform
+	  spectrumHilbert = Copy: "hilbert"
+	  Formula: "if row=1 then Spectrum_original[2,col] else -Spectrum_original[1,col] fi"
+	  soundHilbert = To Sound
+
+	# 3: Obtain the ENV from the analytic signal
+	  env = Copy: "'.name$'_ENV"
+	  Formula: "sqrt(self^2 + Sound_'.name$'[]^2)"
+
+	# 4: Obtain the TFS (method 1: cosine of the angle of the analytic signal)
+	  selectObject: soundHilbert
+	  Copy: "'.name$'_TFS"
+	  Formula: "cos(arctan2(self, Sound_'.name$'[]))"
+
+	# 5: cleanup
+	   select Spectrum original
+	   plus Spectrum hilbert
+	   plus Sound hilbert
+	   Remove
+endproc

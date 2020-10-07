@@ -13,7 +13,7 @@ procedure get_envelope_TFS_chunks .name$
 #
 #>> 
 #>> Example:
-# call get_envelope_TFS 'sound$'
+# call get_envelope_TFS_chunks 'sound$'
 # yields 'sound$'_ENV
 # which is the envelope of the sound
 # and 'sound$'_TFS

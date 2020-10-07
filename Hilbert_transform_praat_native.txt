@@ -1,0 +1,64 @@
+procedure fast_Hilbert .name$
+#>> a way to obtain the envelope
+#>> that is faster than a Hilbert transform
+#>> since it uses native optimized Praat functions 
+#>> rather than loops
+#
+#>> NOTE that the actual envelope encoded by the auditory system
+#>> is not the envelope of the full waveform, but rather the envelope
+#>> of a single auditory filter.
+#>> so if you want a realistic envelope that woudl be represented
+#>> by the auditory system, then you'll want to filter 
+#>> into ERB-type bands first, 
+#>> then run this procedure on each of those bands. 
+#
+#>> Example:
+# call fast_Hilbert 'sound$'
+# yields 'sound$'_ENV
+# which is the envelope of the sound
+#
+#>> To get the envelope with classical definition
+# (fluctuations slower than 50 Hz):
+# select Sound 'sound$'_ENV
+# Filter (pass Hann band): 0, 50, 5
+#
+#>> To express the classical envelope in dB instead of voltage:
+# select Sound 'sound$'_ENV
+# Filter (pass Hann band): 0, 50, 5
+# Copy: "Voice_source_ENV_band_dB"
+# # the important part:
+# Formula: "20 * log10(self[col]/0.0002)"
+#
+#>> To get modulation spectrum,
+# take the envelope and perform a FFT,
+# then look in the frequencies below 64 Hz. 
+################################################
+
+   # make the amplitude envelope
+	select Sound '.name$'
+	.samplerate = Get sampling frequency
+	.duration = Get total duration
+	
+	To Intensity: 800, 0, "yes"
+	selectObject: "Intensity '.name$'"
+	Down to IntensityTier
+	To AmplitudeTier
+	Down to TableOfReal
+	To Matrix
+	Transpose
+	To Sound (slice): 2
+	Rename... temp
+	Scale times to: 0, .duration
+	Resample: .samplerate, 5
+	Rename: "'.name$'_ENV"
+
+   #cleanup
+	select Intensity '.name$'
+	plus IntensityTier '.name$'
+	plus AmplitudeTier '.name$'
+	plus TableOfReal '.name$'
+	plus Matrix '.name$'
+	plus Matrix '.name$'_transposed
+	plus Sound temp
+	Remove
+endproc

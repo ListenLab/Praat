@@ -99,7 +99,6 @@ constrain_dynamic_range <- function(spectrogram_object,
   # truncate the upper limit
   intensity_values[intensity_values > upper_limit] <- upper_limit
   
-  
   # Remove anything that's more than [DR] below the uppr limit
   intensity_values[
     intensity_values < (upper_limit - dynamic_range)] <- NA
@@ -109,7 +108,6 @@ constrain_dynamic_range <- function(spectrogram_object,
 }
 
 pre_emphasize <- function(spectrogram_object, column = "Level", starting_freq = 50){
-  
   # calculate the number of octaves away 
   # from the starting frequency for pre-emphasis
   spectrogram_object$octaves_from_ref <- 

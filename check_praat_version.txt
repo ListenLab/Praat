@@ -1,0 +1,14 @@
+call check_praat_version
+
+procedure check_praat_version
+	#>> Ideally it's the most recent version...
+	#>> But I think that at least version  5.3.64 will do. 
+	praat_version$ = left$(praatVersion$, (rindex(praatVersion$, ".")-1));
+	praat_version = 'praat_version$'
+	
+	print Using Praat version 'praat_version$''newline$'
+	
+	if praat_version < 6
+	   exit Please download the most recent version of Praat.
+	endif
+endproc

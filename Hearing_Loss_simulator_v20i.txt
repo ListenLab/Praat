@@ -1,0 +1,1238 @@
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%#
+# SIMULATE HEARING LOSS
+#
+#  Version 20-Interactive
+#  Matthew B. Winn
+#  February 3, 2021
+#
+# Spread excitation from adjacent ERBs
+# ... rendering inaudible any sound below frequency-specific threshold
+#        controlling for spectral splatter
+#
+# ... and adjust sensation level of things that remain 
+#      within the audible dynamic range
+#
+# info on the dynamic range scaling: 
+# signal level is converted to:
+# ((signal - threshold) / (dr_upper - threshold)) * dr_upper
+# e.g. if the threshold is 50 dB, 
+# and the dynamic range ceiling is 90 dB,
+# then a sound of 50 is scaled to be zero, 
+# and a sound of 60 dB is scaled to be ((60 - 50) / (90 - 50)) * 90; 22.5 dB
+# and a sound of 80 dB is scaled to be ((80 - 50) / (90 - 50)) * 90; 67.5 dB
+# and a sound of 85 dB is scaled to be ((85 - 50) / (90 - 50)) * 90; 78.75 dB
+# and a sound of 90 would still be 90
+# and of course anything below 50 would be silent
+# Note the rapid growth of loudness 
+# to reflect loudness recruitment in cochlear hearing loss
+#
+#
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%#
+# processing time estimate:
+# { 0.713 + (0.00007275 * number of samples) } seconds
+# 
+# samplerate	sound_dur	proc_time
+#      44100	      0.5	2
+#      44100	      1	        3.8
+#      44100	      2	        6.85
+#      44100	      4	       13.5
+#      22050	      0.5	1.6
+#      22050	      1	        2.25
+#      22050	      2	        4.24
+#      22050	      4	        7.57
+#      16000	      0.5	1.47
+#      16000	      1	        1.9
+#      16000	      2	        2.9
+#      16000	      4	        5.3
+#%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%#
+form Hearing loss simulation
+
+	#-------------------------------------------------------------#
+		real normal_hearing_up_to_freq 500
+	comment slope of 10= mild; 15=moderate; 20=severe @4000 Hz
+		   # higher numbers mean more-severe hearing loss. 
+		real hl_slope_per_octave 15
+	#-------------------------------------------------------------#
+		real relative_filter_size 3
+	#-------------------------------------------------------------#
+	#comment frequencies to use for analysis and synthesis
+		real lower_freq_limit 100
+		real upper_freq_limit 8000
+	
+	#comment scale dynamic range of suprathreshold sounds
+		boolean adjust_dynamic_range 1
+		real dr_upper 90
+		real dr_lower 15
+	
+	comment this is the "real-world" level of the input. 
+		real speaking_level 65
+	
+		boolean print_info 0
+		boolean print_stopwatch 0
+	comment ===========================================================
+
+	  boolean run_entire_folder_of_sounds 0
+	  boolean save 0
+	  boolean cleanup_new_sounds_from_list 1
+	  sentence orig_directory L:\PraatScripts\HL_simulation\Demo_folder
+	  sentence new_directory_name HL_sim_10
+	  boolean remove_suffix_on_save 1
+  
+endform
+
+
+#######################################
+
+clearinfo
+
+# Set all the hard-coded paramaters
+	call set_parameters
+
+# Print the audiomtric thresholds
+	call print_audiogram
+
+if print_stopwatch = 1
+	print processing'tab$'sound'tab$'index'tab$'of'tab$'total_number'tab$'duration'tab$'proc_time'newline$'
+endif
+
+# detect whether the user wants to run a FOLDER of sounds, 
+# or a slection of sounds in the Objects window
+if run_entire_folder_of_sounds == 0
+	# it will use whatever you have selected. 
+	# example sound selection:
+	nocheck select Sound ieee016
+	#
+	# Allow the listener to select all the sounds they want to process
+	pause select all sounds to be used for this operation
+	numberOfSelectedSounds = numberOfSelected ("Sound")
+
+	# Assign object pointer numbers to each selection
+	for thisSelectedSound to numberOfSelectedSounds
+	    sound'thisSelectedSound' = selected("Sound",thisSelectedSound)
+	endfor
+
+	for thisSound from 1 to numberOfSelectedSounds
+		select sound'thisSound'
+		
+		# obtain the object name
+		name$ = selected$("Sound")
+		total_duration = Get total duration
+		
+		# print timing info header if desired
+		if print_stopwatch = 1
+			stopwatch
+			print processing'tab$''name$''tab$''thisSound''tab$'of'tab$''numberOfSelectedSounds''tab$''total_duration:3''tab$'
+		endif
+		
+		# The main function
+		call simulate_HL 'name$'
+		
+		if print_stopwatch = 1
+			time_elapsed = stopwatch
+			print total time:'tab$''time_elapsed:3''newline$'
+		endif
+	
+	# end loop through selected sounds
+	endfor
+
+else
+	# If you're processing a whole folder,
+	# call up the sounds in the folder one at a time...
+
+	Create Strings as file list: "fileList", "'orig_directory$'\*.wav"
+	num_files = Get number of strings
+
+	# Only proceed if there are any files to work with
+	print Processing 'num_files' files in the folder 'orig_directory$''newline$'
+
+	if num_files < 1
+	   exit no files in this directory!
+	endif
+
+	# Make the new folder for the new sounds
+	system mkdir 'orig_directory$'\'new_directory_name$'
+
+	# Loop through the list of sounds in the folder
+	for file_index from 1 to num_files
+		select Strings fileList
+
+		filename$ = Get string: 'file_index'
+		Read from file: "'orig_directory$'\'filename$'"
+		name$ = selected$("Sound")
+		
+		# get basic info
+			total_duration = Get total duration
+			samplerate = Get sampling frequency
+		
+		# resample if desired
+		if resample_batch
+			call resample_sound_22050
+		endif
+			
+		# print timing info if desired
+		if print_stopwatch = 1
+			stopwatch
+			print processing'tab$''name$''tab$''thisSound''tab$'of'tab$''numberOfSelectedSounds''tab$''total_duration:3''tab$'
+		endif
+		
+		# The main function
+		call simulate_HL 'name$'
+
+		# print timing info if desired
+		if print_stopwatch = 1
+			time_elapsed = stopwatch
+			print 'time_elapsed:3''newline$'
+		endif
+
+		# save the sound
+		if save == 1
+			# save the sound
+			save_Suffix$ = "_ERB_'relative_filter_size_label$'_'hl_slope_per_octave'"
+			    if remove_suffix = 1
+				save_Suffix$ = ""
+			    endif
+			select Sound 'name$'_ERB_'relative_filter_size_label$'_'hl_slope_per_octave'
+			Save as WAV file... 'orig_directory$'\'new_directory_name$'\'name$''save_Suffix$'.wav
+			
+		# otherwise, just leave it in the objects window
+		endif
+
+		call cleanup_files_from_list
+
+	endfor
+	
+endif
+
+#
+#
+##
+###
+#####
+########
+#############
+#####################
+##################################
+#######################################################
+## PROCEDURES 
+
+
+procedure simulate_HL name$
+#>> This is the main procedure
+#>> It is a sequence of steps that filter the sound,
+#>> maintain lower frequencies not affected,
+#>> adjust amplitude dynamic range, etc. 
+
+
+	select Sound 'name$'
+	
+	# Obtain basic sound information to be used later
+		original_intensity = Get intensity (dB)
+		samplerate = Get sampling frequency
+	
+	# Scale the sound to a target speaking level
+	# (declared on the startup window)
+	# so that you place it correclty within the dynamic range
+		if override_speaking_level == 1
+			Scale intensity... speaking_level
+		endif
+
+	# Check to make sure the sound sampling frequency 
+	# supports the upper limit that you want to transmit
+		call check_sampling_support
+ 
+	# Extract part that is unaffected by the hearing loss,
+	# to use for referencing intensity level later
+		# The intensity of the frequencies unaffected by hearing loss
+		# 	should be the same intensity before and after 
+		# 	the HL simulation filtering.
+		select Sound 'name$'
+		Filter (pass Hann band): 0, cutoff_HL_frequency-(filter_width_Hz/2), filter_width_Hz
+		Rename... 'name$'_unaffected_LF_portion
+		intensity_of_unaffected_LF_part = Get intensity (dB)
+		
+		# obtain reference intensity for highest frequency unaffected by hearing loss 
+			ref_lower_f2 = cutoff_HL_frequency
+			ref_erb_dist = erb(cutoff_HL_frequency)
+			ref_lower_f1 = ref_lower_f2 - ref_erb_dist
+		
+			select Sound 'name$'
+			Filter (pass Hann band): ref_lower_f1, ref_lower_f2, ref_erb_dist
+			Rename... reference_LF_band
+			intensity_reference_LF_band = Get intensity (dB)
+				
+	# Extract part that is affected by the hearing loss,
+		Filter (stop Hann band): 0, cutoff_HL_frequency+(filter_width_Hz/2), filter_width_Hz
+		Rename... 'name$'_HL_portion
+		intensity_of_HF_HL_portion = Get intensity (dB)
+		Remove
+
+		# obtain reference intensity for band just above the cutoff (affected by hearing loss)
+			ref_erb_above_cutoff = erb(cutoff_HL_frequency + 200)
+			ref_higher_f1 = cutoff_HL_frequency + 100
+			ref_higher_f2 = cutoff_HL_frequency + 300
+			
+			select Sound 'name$'
+			Filter (pass Hann band): ref_higher_f1, ref_higher_f2, 200
+			Rename... reference_band_orig
+			intensity_reference_band_orig = Get intensity (dB)
+			
+			#threshold_at_4k = (log2(4000)-8.9657)*hl_slope_per_octave
+			#intensity_reference_HF_band_target = intensity_reference_HF_band_orig - threshold_at_4k
+			
+			#print int LF 'cutoff_HL_frequency' = 'intensity_reference_LF_band:1''newline$'
+			#print int 4k orig = 'intensity_of_HF_HL_portion:1''newline$'
+			#print attenuation at 4k = 'attenuation_at_4k:1''newline$'
+			#print int 4k target = 'intensity_reference_HF_band_target:1''newline$'
+
+			select Sound reference_band_orig
+			plus Sound reference_LF_band
+			Remove
+			#pause check targets
+
+
+	#=========================================================#
+	# Split the sound into ERBs and widen the cochlear filters
+		call split_into_ERBs
+		# includes procedure 'widen_cochlear_filters'
+
+	# Now combine the filtered channels back together
+		call combine_ERB_channels
+		# yields: 'name$'_ERB_combined
+	#=========================================================#
+
+	# Re-scale the intensity of low-frequency portion
+	# to ensure that the region that should have been unaffected
+	# is in fact unaffected by all the filtering. 
+	# Then when you add the original LF energy in,
+	# it is at the appropriate intensity. 
+		#call rescale_unaffected_low_frequencies
+		call rescale_energy_from_crossover
+			# yields: Sound temp_scaled_to_LF_anchor
+
+
+	# Block out the LF part to be restored from the original sound
+		select Sound temp_scaled_to_LF_anchor
+		Filter (stop Hann band): 0, cutoff_HL_frequency+(filter_width_Hz/2), filter_width_Hz
+		# yields: temp_scaled_to_LF_anchor_band
+		
+
+	# Initialze the final sound output:
+	# Copy the filtered sound  into a new object and nullify it, 
+	# but maintain all the sample times
+	# So what when you blend in the original sound and finalize it,
+	# it can be time-locked to the original sound 
+	# in adjacent Praat viewing windows
+		select Sound 'name$'
+		Copy... 'name$'_ERB_'relative_filter_size_label$'_'hl_slope_per_octave'
+		Formula... 0
+		
+
+	# Add the unaffected original low-pass portion 
+	# to the filtered & scaled HL-sim sound
+		Formula... Sound_temp_scaled_to_LF_anchor_band[col] + Sound_'name$'_unaffected_LF_portion[col]
+
+
+	# Cleanup intermediate objects lying around the list
+		select Sound 'name$'_ERB_combined
+		   if remove_parts = 1
+		      for n from 1 to erb_max
+			 plus Sound 'name$'_erb_'n'_recombined
+		      endfor
+		   endif
+		   plus Sound 'name$'_unaffected_LF_portion
+		   #plus Sound modified_LF_portion
+		   plus Sound reference_band_orig
+		   plus Sound reference_band_modified
+		   plus Sound temp_scaled_to_LF_anchor
+		   plus Sound temp_scaled_to_LF_anchor_band
+		Remove
+
+
+	# Select the new HL-simulated sound object by default
+		select Sound 'name$'_ERB_'relative_filter_size_label$'_'hl_slope_per_octave'
+
+	if print_stopwatch = 0
+	    # if not reporting exact timing, just print that the sound is done. 
+		print 'newline$'DONE with Sound 'name$'! 'newline$'
+	endif
+
+endproc
+
+
+procedure resample_sound_22050
+#>> Used to resample a sound 
+#>> and re-name in place
+   if samplerate > 22050
+	Resample... 22050 30
+	Rename... temp
+	select Sound 'name$'
+	Remove
+	select Sound temp
+	Rename... 'name$'
+   endif
+endproc
+
+
+procedure check_sampling_support
+#>> Ensures that if you want to maintain up to Frequency X,
+#>> that your sampling frequency is at least 2*X
+	if upper_freq_limit > (samplerate/2)
+		nyquist = (samplerate/2)
+		upper_freq_limit = nyquist
+		print upper_freq_limit of 'upper_freq_limit' cannot be supported with samplerate of 'samplerate''newline$'
+		print lowering upper_freq_limit to 'nyquist''newline$'
+	endif
+endproc
+
+
+procedure split_into_ERBs
+#>> Rolling from low to high frequencies,
+#>> band-pass filters a sound into 1-ERB-wide bands,
+#>> and maintains memory of how many bands were produced
+#>> between lower and upper frequency limits
+#>> that were specified in the startup window. 
+
+	# Initialize counter for ERB index
+		n = 1
+
+	if print_info = 1
+		#clearinfo
+		print 'newline$'
+		print ERB'tab$'Freq_lower'tab$'Freq_upper'tab$'ERB_width'tab$''tab$'Freq_lower_wide'tab$'Freq_upper_wide'tab$'EBR_width_spread'newline$'
+	endif
+
+	# Establish the first ERB filter in the frequency domain
+		freq1 = lower_freq_limit
+		erb_dist = erb(freq1)
+		freq2 = freq1 + erb_dist
+
+	# Establish frequency boundaries of the widened filter
+		half_relative_filter_proportion = (1 + relative_filter_size)/2
+		freq1_widened = freq2 - (erb_dist*half_relative_filter_proportion)
+		freq2_widened = freq1 + (erb_dist*half_relative_filter_proportion)
+		erb_dist_spread = freq2_widened - freq1_widened
+
+	# Print this info
+		if print_info = 1
+			print 'n''tab$''freq1:1''tab$''freq2:1''tab$''erb_dist:2''tab$''freq1_widened:1''tab$''freq2_widened:1''tab$''erb_dist_spread:1''newline$'
+		endif
+
+	# Make the widened ERB filter
+			if report_timing = 1
+				stopwatch
+			endif
+		call widen_cochlear_filters
+			if report_timing = 1
+				elapsed = stopwatch
+				print first filter took 'elapsed:3' s to complete 'newline$'
+			endif
+
+	# Continue making ERB filters until you're up to the max frequency
+	   while freq2 < upper_freq_limit
+		n = n + 1
+		call widen_cochlear_filters
+	   endwhile
+
+	# Get the index of the highest ERB (in normal terms) that you have reached.
+	# this is the ERB index of the highest frequency filter used. 
+		erb_max = n
+
+endproc
+
+
+procedure combine_ERB_channels
+#>> Take all the ERB filtered sounds
+#>> and combined them together.
+
+	nocheck select Sound junk
+	for n from 1 to erb_max
+	     plus Sound 'name$'_erb_'n'_recombined
+	endfor
+
+	# not actually being made into a stereo signal;
+	# this is just a Praat shortcut
+	# that makes it easier to
+	# add sounds together. 
+	Combine to stereo
+	Rename... temp
+	Convert to mono
+	Rename... 'name$'_ERB_combined
+
+	select Sound temp
+	Remove
+endproc
+
+
+procedure rescale_unaffected_low_frequencies
+#>> Modify the filtered sound 
+#>> so that the intensity of its frequencies 
+#>> in the region intended to be unaffected
+#>> is the same as the corresponding original (unfiltered)
+#>> sound frequency region whose intensity level was extracted earlier. 
+
+		select Sound 'name$'_ERB_combined
+		Filter (pass Hann band): 0, cutoff_HL_frequency+(filter_width_Hz/2), filter_width_Hz
+		Rename... modified_LF_portion
+		intensity_of_filtered_low_freqs = Get intensity (dB)
+
+		# This is the difference in intensity,
+		# after all of the HL processing/filtering. 
+			modified_sound_int_difference = intensity_of_filtered_low_freqs - intensity_of_unaffected_LF_part
+
+	# Scale intensity to match original,
+	# anchored by the low-frequency part 
+	# that should have remained unchanged.
+	# (i.e. adjust the intensity of the whole filtered output
+	# by the inverse of the amount that the low-frequency part was changed)
+		select Sound 'name$'_ERB_combined
+		Formula... self[col] * 10^(-modified_sound_int_difference/20)
+
+			if report_timing = 1
+				elapsed = stopwatch
+				print re-leveling took 'elapsed:3' s to complete 'newline$'
+			endif
+
+	# Resample to match original sampling rate
+		select Sound 'name$'_ERB_combined
+		if report_timing = 1
+			stopwatch
+		endif
+		Resample... samplerate 20
+		if report_timing = 1
+			elapsed = stopwatch
+			print resampling 'name$' took 'elapsed:3' s to complete 'newline$'
+		endif
+
+	# Rename the sound in the obejcts list
+	Rename... temp_scaled_to_LF_anchor
+	
+endproc
+
+
+procedure rescale_energy_from_crossover
+#>> Modify the filtered sound 
+#>> so that the intensity of its frequencies 
+#>> in the region just beyond the unaffected region
+#>> is the same as the corresponding original (unfiltered)
+#>> sound frequency region whose intensity level was extracted earlier. 
+	
+	# extract the reference band from the original sound
+	select Sound 'name$'
+	Filter (pass Hann band): ref_higher_f1, ref_higher_f2, 200
+	Rename... reference_band_orig
+	intensity_reference_band_orig = Get intensity (dB)
+	
+	# extract the reference band from the sound that was altered
+	select Sound 'name$'_ERB_combined
+	Filter (pass Hann band): ref_higher_f1, ref_higher_f2, 200
+	Rename... reference_band_modified
+	intensity_reference_band_modified = Get intensity (dB)
+	
+	intensity_changed_from_modification = intensity_reference_band_modified - intensity_reference_band_orig
+	
+	
+	# Scale intensity to match original,
+	# anchored by the low-frequency part 
+	# that should have remained unchanged.
+	# (i.e. adjust the intensity of the whole filtered output
+	# by the inverse of the amount that the low-frequency part was changed)
+		select Sound 'name$'_ERB_combined
+		Formula... self[col] * 10^(-intensity_changed_from_modification/20)
+
+			if report_timing = 1
+				elapsed = stopwatch
+				print re-leveling took 'elapsed:3' s to complete 'newline$'
+			endif
+	
+		# Resample to match original sampling rate
+			select Sound 'name$'_ERB_combined
+			if report_timing = 1
+				stopwatch
+			endif
+			Resample... samplerate 20
+			if report_timing = 1
+				elapsed = stopwatch
+				print resampling 'name$' took 'elapsed:3' s to complete 'newline$'
+			endif
+	
+		# Rename the sound in the obejcts list
+	Rename... temp_scaled_to_LF_anchor
+
+endproc
+
+procedure apply_HL_attenuation .name$ .refilt_low .refilt_high .adjust_dynamic_range
+#>> modify the intensity contour of a single ERB,
+#>> to nullify it if below threshold,
+#>> and optionally scale the dynamic range 
+#>> of energy above threshold
+# alter the intensity contour
+	
+	select Sound '.name$'
+	.end_time = Get total duration
+	# Make a copy now,
+	# so that you can compare later
+	if inspect_int = 1
+		Copy... '.name$'_unmodified
+	endif
+	
+	#------------------------------------------------#
+	# BASIC COMPUTATIONS
+	#
+	# Calculate the threshold at this ERB,
+	# based on the slope of HL per octave
+	# the slope value is named 'attenuation'
+   	if freq1 > cutoff_HL_frequency
+		attenuation = (log2(freq1)-8.9657)*hl_slope_per_octave
+
+	# Calculate center frequency of the band
+		cf = ((freq2 - freq1)/2) + freq1
+	
+	if inspect_int = 1
+		pause cf is 'cf:0' and attenuation is 'attenuation:0'
+	endif
+	
+	# Make an amplitude envelope
+		select Sound '.name$'
+		To Intensity: 100, 0, "yes"
+		timestep = Get time step
+		num_frames = Get number of frames
+			if report_timing = 1
+				stopwatch
+			endif
+
+	# first silence everything up until the first intensity time point
+		select Intensity '.name$'
+		first_int_time = Get time from frame number: 1
+		select Sound '.name$'
+		Formula (part): 0, first_int_time, 1, 1, "0"
+
+	# Walk along every time frame
+	for frame_index from 1 to num_frames
+		select Intensity '.name$'
+		this_time = Get time from frame number: frame_index
+		this_frame_intensity = Get value in frame: frame_index
+
+		# Get the boundaries of the time window
+		    frame_start = first_int_time + (frame_index-1)*timestep
+		    frame_end = frame_start + timestep
+
+	
+		# If the intensity at this time is below threshold,
+		# then set the intensity of this time frame to zero. 
+			if this_frame_intensity < attenuation
+				    if inspect_int = 1
+				print channel frame index 'frame_index' is 'this_frame_intensity:1'; less than 'attenuation:0''newline$'
+			endif
+
+			select Sound '.name$'
+			# If you want to view in detail, 
+			# zoom in to the sound here
+			if inspect_int = 1
+				call inspect_intensity
+			endif
+			
+			# Nullify that region of the intensity contour
+			# corresponding to a drop below threshold
+			# it says Sound and not Intensity,
+			# because the intensity contour is a time series like a Sound object
+				select Sound '.name$'
+				Formula (part): frame_start, frame_end, 1, 1, "0"
+		
+		else
+		   # The intensity is above threshold....
+		   if .adjust_dynamic_range = 1
+		   	# if you're re-scaling the dynamic range
+		   	# for energy above threshold, then proceed:
+				call rescale_within_dynamic_range '.name$'
+		   
+		   endif
+
+		# end conditional if the energy is above threshold
+		endif
+	
+	# end loop through frames of intensity
+	endfor
+
+	# then silence everything from the last intensity time point to the end
+		select Intensity '.name$'
+		last_int_time = Get time from frame number: num_frames
+		select Sound '.name$'
+		Formula (part): last_int_time, .end_time, 1, 1, "0"
+
+
+	if save_envelopes == 1
+		Copy... '.name$'_Envelope_after_modification
+	endif
+	
+			if report_timing = 1
+				elapsed = stopwatch
+				print Intensity frames for ERB 'n' took 'elapsed:3' s to modify 'newline$'
+			endif
+	
+	   # Check the envelope here if desired
+	    if inspect_int = 1
+		pause check zeroed sound channel
+		# remove the copy of the unmodified sound
+		#(as this was only to be used if you were inspecting the envelopes)
+		select Sound '.name$'_unmodified
+		Remove
+	    endif
+	
+	   # Remove the original input because you want the output to have the same name
+		select Sound '.name$'
+		Rename... temp
+		
+		if save_envelopes == 1
+			Copy... '.name$'_Envelope_before_LPF
+		endif
+	
+	   # Refilter to remove the spectral splatter 
+	   # that was introduced by the amplitude modulation
+		Filter (pass Hann band): .refilt_low, .refilt_high, filter_width_Hz
+		Rename... '.name$'
+		
+		if save_envelopes == 1
+			Copy... '.name$'_Envelope_after_LPF_splatter_redux
+		endif
+		
+	   # Cleanup
+		select Sound temp
+		plus Intensity '.name$'
+		Remove
+	
+   # End check to see if the frequency is above the HL cutoff value
+   endif
+		
+	# select the re-filtered sound by default
+	select Sound '.name$'
+endproc
+
+procedure inspect_intensity
+#>> for viewing in great detail,
+#>> if the sound would be at least 20% of dynamic range,
+#>> zoom in to see what's going on,
+#>> and let the user view it. 
+   
+   if attenuation > inspect_int_atten_cutoff
+	View & Edit
+	editor Sound '.name$'
+	Select... frame_start frame_end
+	Zoom to selection
+	Zoom out
+	Zoom out
+	Zoom out
+	pause about to set this part to zero
+	Close
+	endeditor
+   endif
+endproc
+			
+procedure rescale_within_dynamic_range .name$
+#>> rescale the intensity of a timeframe of the amplitude envelope
+#>> so that it reflects threshold and loudness growth
+
+	# figure out where you are in the dynamic range
+		dynamic_range_proportion = (this_frame_intensity-attenuation)/(dr_upper-attenuation)
+
+	if inspect_DR = 1
+	   if dynamic_range_proportion > 0.5
+		print 'this_frame_intensity:1' is 'dynamic_range_proportion:3' between 'attenuation' and 'dr_upper''newline$'
+		if dynamic_range_proportion > 1
+			print Adjusting to be upper limit of dynamic range at 'dr_upper''newline$'
+		endif
+		pause inspect dynamic range multiplication in Info window
+	   endif
+	endif
+
+	# Correct for narrow dynamic range
+	# (this should normally not happen
+	# unless you have an intensity region above 90 dB)
+		if dynamic_range_proportion > 1
+			dynamic_range_proportion = 1
+		endif
+
+	# Map this intensity level between the threshold and upper limit
+	# to reflect proportion fo dynamic range
+		target_intensity_level = (dynamic_range_proportion*(dr_upper-dr_lower)) + dr_lower
+		intensity_adjustment = target_intensity_level - this_frame_intensity
+
+	# Make the adjustment here
+		multiplier = 10^(intensity_adjustment/20)
+
+		if inspect_DR = 1
+		    print multiplying by 'multiplier:3' to change 'this_frame_intensity:1' to 'target_intensity_level:1' dB'newline$'
+		endif
+
+		select Sound '.name$'
+		Formula (part): frame_start, frame_end, 1, 1, "self * multiplier"
+endproc
+
+			
+procedure widen_cochlear_filters
+#>> Figure out the frequency boundaries corresponding to
+#>> a band that is a specified proportion 
+#>> wider than the current ERB. 
+#>> That wider band's energy will be superimposed 
+#>> onto the ERB, effectively spreading excitation
+#>> across filters. 
+#
+#>> It is currently designed to work symmetrically in the ERB-frequency domain,
+#>> which means it will have farther spread toward high frequencies,
+#>> on a linear scale. 
+#
+#>> This is used to simulate broadened cochlear filters
+#>> in sensorineural hearing loss. 
+
+	# Update the frequency boundaries based on the last input
+		freq1 = freq2
+		erb_dist = erb(freq1)
+		freq2 = freq1 + erb_dist
+	
+	# Figure out how wide to spread the frequency boundaries
+		half_relative_filter_proportion = (1 + relative_filter_size)/2
+		freq1_widened = freq2 - (erb_dist*half_relative_filter_proportion)
+		freq2_widened = freq1 + (erb_dist*half_relative_filter_proportion)
+		erb_dist_spread = freq2_widened - freq1_widened
+
+	# Print the frequency info to the window
+		if print_info == 1
+			print 'n''tab$''freq1:1''tab$''freq2:1''tab$''erb_dist:2''tab$''freq1_widened:1''tab$''freq2_widened:1''tab$''erb_dist_spread:1''newline$'
+		endif
+	
+	# Filter the normal ERB width
+		select Sound 'name$'
+		Filter (pass Hann band): freq1, freq2, filter_width_Hz
+		Rename... 'name$'_erb_'n'
+		int = Get intensity (dB)
+	
+	# Filter a widened band
+		select Sound 'name$'
+		Filter (pass Hann band): freq1_widened, freq2_widened, filter_width_Hz
+		Rename... 'name$'_erb_'n'_spread
+
+	# Get the envelope & fine structure of both regular and wide ERB	
+			if report_timing == 1
+				stopwatch
+			endif
+		call get_envelope_TFS_chunks 'name$'_erb_'n'
+		
+		# get envelope for the spread channel
+		if use_fast_envelope == 0
+			call get_envelope_TFS_chunks 'name$'_erb_'n'_spread
+		
+		else 
+		# update: fast envelope for the spread channel
+			call fast_envelope 'name$'_erb_'n'_spread
+		endif
+
+			if report_timing = 1
+				elapsed = stopwatch
+				print Hilbert for ERB 'n' took 'elapsed:3' s to complete 'newline$'
+			endif
+		
+	# Apply envelope of the widened filter to the TFS of the regular ERB,
+	# to impose spread of excitation. 
+		select Sound 'name$'_erb_'n'_TFS
+		Copy... 'name$'_erb_'n'_recombined_temp
+		Formula... self[col] * Sound_'name$'_erb_'n'_spread_ENV[col]
+	
+	# Filter it back to its original ERB band
+		Filter (pass Hann band): freq1, freq2, filter_width_Hz
+		Rename... 'name$'_erb_'n'_recombined
+		if maintain_filter_intensity = 1
+			Scale intensity... int
+		endif
+		
+	# Nullify energy below threshold,
+	# and optionally re-scale audible energy 
+	# within the dynamic range
+		call apply_HL_attenuation 'name$'_erb_'n'_recombined freq1 freq2 adjust_dynamic_range
+	
+	# Draw the envelopes to verify, if desired
+	if draw = 1
+		call draw_envelopes
+      	endif
+      	
+      	# cleanup
+      	if remove_parts = 1
+      	   select Sound 'name$'_erb_'n'
+      	   plus Sound 'name$'_erb_'n'_spread
+      	   plus Sound 'name$'_erb_'n'_ENV
+      	   plus Sound 'name$'_erb_'n'_TFS
+      	   plus Sound 'name$'_erb_'n'_spread_ENV
+      	   if use_fast_envelope == 0
+      	   	plus Sound 'name$'_erb_'n'_spread_TFS
+      	   endif
+      	   plus Sound 'name$'_erb_'n'_recombined_temp
+      	   Remove
+      	endif
+      		
+endproc
+
+
+procedure draw_envelopes
+#>> Inspect the envelopes as changed by the procedure
+#>> that re-scales dynamic range
+
+	# Hard-coded variable for the floor of the y axis
+		draw_min_y = -0.01
+
+	# Obtain the TFS and envelope of the ERB
+	# that has been processed through the HL simulation
+	# (it has an envelope that is affected by adjacent energy
+	#  but TFS from the original band)
+	# It has also been scaled to the adjusted dynamic range
+		call get_envelope_TFS_chunks 'name$'_erb_'n'_recombined
+
+	# Low-pass filter the relevant envelopes
+		select Sound 'name$'_erb_'n'_ENV
+		plus Sound 'name$'_erb_'n'_spread_ENV
+		plus Sound 'name$'_erb_'n'_recombined_ENV
+		Filter (pass Hann band): 0, envelope_draw_LPF, filter_width_Hz
+
+		select Sound 'name$'_erb_'n'_spread_ENV_band
+		env_int = Get intensity (dB)
+		env_max = Get maximum: 0, 0, "None"
+
+	# Clear the picture window
+		Erase all
+
+	# Draw the widened envelope in red
+		# this is the HL-sim envelope 
+		# as if it incorporated all the sideband energy
+		select Sound 'name$'_erb_'n'_spread_ENV_band
+		Red
+		Dashed line
+		Line width: 2
+		Draw: 0, 0, draw_min_y, env_max*1.5, "yes", "Curve"
+
+	# Draw the compromised envelope in blue
+		# this is the HL-simulated envelope,
+		# but after dynamic range scaling,
+		# and re-filtering to remain within the target ERB
+		# and avoid sideband *fluctuations*
+		# that result from the increased bandwidth
+		select Sound 'name$'_erb_'n'_recombined_ENV_band
+		Blue
+		Solid line
+		Line width: 3
+		Draw: 0, 0, draw_min_y, env_max*1.5, "yes", "Curve"
+
+	# Draw the original envelope in Black 
+		select Sound 'name$'_erb_'n'_ENV_band
+		Black
+		Solid line
+		Line width: 2
+		Draw: 0, 0, draw_min_y, env_max*1.5, "yes", "Curve"
+
+	# Actually let the user see the image. 
+	# This should always be 1,
+	# unless you just want it to flash super quickly. 
+	if draw_pause = 1
+		pause
+	endif
+	
+	# cleanup
+	    select Sound 'name$'_erb_'n'_recombined_TFS
+	    plus Sound 'name$'_erb_'n'_recombined_ENV
+	    plus Sound 'name$'_erb_'n'_ENV_band
+	    plus Sound 'name$'_erb_'n'_spread_ENV_band
+	    plus Sound 'name$'_erb_'n'_recombined_ENV_band
+    	Remove
+endproc
+	
+	
+procedure fast_envelope .name$
+#>> a way to obtain the envelope
+#>> that is faster than a Hilbert transform
+#>> since it uses native optimized Praat functions 
+#>> rather than loops
+
+   # make the amplitude envelope
+	select Sound '.name$'
+	.samplerate = Get sampling frequency
+	.duration = Get total duration
+	
+	To Intensity: 800, 0, "yes"
+	selectObject: "Intensity '.name$'"
+	Down to IntensityTier
+	To AmplitudeTier
+	Down to TableOfReal
+	To Matrix
+	Transpose
+	To Sound (slice): 2
+	Rename... temp
+	Scale times to: 0, .duration
+	Resample: .samplerate, 5
+	Rename: "'.name$'_ENV"
+
+   #cleanup
+	select Intensity '.name$'
+	plus IntensityTier '.name$'
+	plus AmplitudeTier '.name$'
+	plus TableOfReal '.name$'
+	plus Matrix '.name$'
+	plus Matrix '.name$'_transposed
+	plus Sound temp
+	Remove
+endproc
+
+
+procedure get_envelope_TFS .name$
+  select Sound '.name$'
+
+	# 1: Time-domain to frequency-domain conversion (DFT)
+	  spectrum = To Spectrum: "no"
+	  #spectrum = To Spectrum: fast_spectrum$
+	  Rename: "original"
+
+	# 2: Hilbert transform
+	  spectrumHilbert = Copy: "hilbert"
+	  Formula: "if row=1 then Spectrum_original[2,col] else -Spectrum_original[1,col] fi"
+	  soundHilbert = To Sound
+
+	# 3: Obtain the ENV from the analytic signal
+	  env = Copy: "'.name$'_ENV"
+	  Formula: "sqrt(self^2 + Sound_'.name$'[]^2)"
+
+	# 4: Obtain the TFS (method 1: cosine of the angle of the analytic signal)
+	  selectObject: soundHilbert
+	  Copy: "'.name$'_TFS"
+	  Formula: "cos(arctan2(self, Sound_'.name$'[]))"
+
+	# 5: cleanup
+	   select Spectrum original
+	   plus Spectrum hilbert
+	   plus Sound hilbert
+	   Remove
+endproc
+
+
+procedure get_envelope_TFS_chunks .name$
+#>> Decompose a sound 
+#>> into its temporal fine structure and envelope
+#>> (Hilbert transform)
+#>>
+#>> This version operates in "chunks" of 32768 samples
+#>> because anything more than that seriously slows down processing speed. 
+#>> This procedure is a split-apply-combine wrapper
+#>> for the basic Hilbert function;
+#>> Operate on those chunks and then re-concatenate the chunks.
+
+	# Get sound info to be used later
+		select Sound '.name$'
+		.duration = Get total duration
+		.samplerate = Get sampling frequency
+
+	# divide into 32768-sample chunks 
+	# to facilitate faster Hilbert transform
+		call divide_32768 '.name$'
+
+	# figure out how many chunks were created
+		num_chunks = divide_32768.chunks_analyzed
+	
+	# Hilbert transform for each successive chunk
+		for sound_part from 1 to num_chunks
+			call get_envelope_TFS '.name$'_part_'sound_part'
+		endfor
+	
+	# Sequence the TFSs back together into one sound
+		nocheck select junk
+		for sound_part from 1 to num_chunks
+			plus Sound '.name$'_part_'sound_part'_TFS
+		endfor
+		Override sampling frequency: .samplerate
+		Concatenate
+		Rename... junk
+		Extract part: 0, .duration, "rectangular", 1, "no"
+		Rename... '.name$'_TFS
+		select Sound junk
+		Remove
+	
+	# Sequence the ENVs back together into one sound
+		nocheck select junk
+		for sound_part from 1 to num_chunks
+		   	plus Sound '.name$'_part_'sound_part'_ENV
+		endfor
+		Override sampling frequency: .samplerate
+		Concatenate
+		Rename... junk
+		Extract part: 0, .duration, "rectangular", 1, "no"
+		Rename... '.name$'_ENV
+		select Sound junk
+	   	Remove
+	
+	# Cleanup
+		nocheck select junk
+		for sound_part from 1 to num_chunks
+			plus Sound '.name$'_part_'sound_part'
+			plus Sound '.name$'_part_'sound_part'_TFS
+			plus Sound '.name$'_part_'sound_part'_ENV
+		endfor
+		Remove
+endproc
+
+
+procedure divide_32768 .name$
+#>> Divide a sound into chunks lasting no more than 32768 samples
+#>> so that they fit within a 16-bit memory framework.
+#>> Note how 2^15 is 32768
+
+	select Sound '.name$'
+	samplerate = Get sampling frequency
+	duration = Get total duration
+	num_samples = Get number of samples
+
+	samples_collected = 0
+	.chunks_analyzed = 0
+	sample_start = 0
+	while samples_collected < num_samples
+
+		sample_end = sample_start + 32768
+		time_start = Get time from sample number: sample_start
+		time_end = Get time from sample number: sample_end
+
+		selectObject: "Sound '.name$'"
+		Extract part: time_start, time_end, "rectangular", 1, "no"
+
+		samples_collected = samples_collected + 32768
+		.chunks_analyzed = .chunks_analyzed + 1
+		sample_start = sample_start + 32769
+
+		# Optional printing of the timepoints of each chunk
+		#print chunk '.chunks_analyzed' 'time_start:3' 'time_end:3''newline$'
+
+		Rename... '.name$'_part_'.chunks_analyzed'
+
+	endwhile
+
+endproc
+
+
+procedure print_audiogram
+#>> Prints thresholds 
+#>> at classic audiometric frequencies
+
+	audio_freqs[1] = 250
+	audio_freqs[2] = 500
+	audio_freqs[3] = 750
+	audio_freqs[4] = 1000
+	audio_freqs[5] = 1500
+	audio_freqs[6] = 2000
+	audio_freqs[7] = 3000
+	audio_freqs[8] = 4000
+	audio_freqs[9] = 6000
+	audio_freqs[10] = 8000
+
+
+	print Audiometric thresholds for 'hl_slope_per_octave' dB/octave'newline$'
+	print starting at 'cutoff_HL_frequency' Hz'newline$'
+	print Frequency'tab$'Threshold'newline$'
+
+	for n from 1 to 10
+
+		freq = audio_freqs[n]
+
+		if freq > cutoff_HL_frequency
+				attenuation = (log2(freq)-8.9657)*hl_slope_per_octave
+
+			print 'freq:0''tab$''attenuation:0''newline$'
+		else
+			print 'freq:0''tab$'0'newline$'
+		endif
+
+	endfor
+
+endproc
+
+procedure cleanup_files_from_list
+	if cleanup_new_sounds_from_list = 1
+	# remove the new sound
+	   select Sound 'name$'_ERB_'relative_filter_size_label$'_'hl_slope_per_octave'
+	   Remove
+	endif
+
+	# remove the original sound
+	   select Sound 'name$'
+	   Remove
+endproc
+
+procedure set_parameters
+#>> Set global parameters
+#>> that are unlikely to change at each new use
+
+	# options to inspect what the script is doing in fine detail, 
+	# ( for debugging )
+		draw_envelopes = 0
+		draw_pause = 0
+		
+	# use a slightly faster envelope extraction
+	# (rather than analytical Hilbert transform)
+	# for the spread envelope
+		use_fast_envelope = 1
+
+	
+		
+	# resample output to 22050
+		resample_batch = 1
+	
+	# simply re-name a startup window variable name
+		cutoff_HL_frequency = normal_hearing_up_to_freq
+
+	fast_spectrum$ = "yes"
+	# convert values from form
+		draw = draw_envelopes
+		remove_suffix = remove_suffix_on_save
+
+	# make ERB width clear in output name
+		relative_filter_size_label = relative_filter_size*100
+		relative_filter_size_label$ = "'relative_filter_size_label'"
+	
+	# width (Hz) of frequency filters
+		filter_width_Hz = 80
+
+	# maintain original intensity of each ERB
+	# set to 0 ("no") because the wider filter means 
+	# it will grow to be distorted, 
+	# and that's actually the goal....?
+		maintain_filter_intensity = 0
+	
+	# Removing all the sequential filtered & modulated ERB channels
+	# set this to 0 to do a VERY in-depth exploration 
+	# of how each frequency filter is altered. 
+	# if you do that, only do it for one sound at a time,
+	# or you'll be buried under an avalanche of objects
+		remove_parts = 1
+
+	# View regions of the sound as they are scaled
+	# within a new dynamic range
+	# (again, for very intense detail)
+		inspect_int = 0
+		inspect_int_atten_cutoff = 20
+
+	# print out and inspect every modification to dynaic range
+	# per channel (lots of detail)
+		inspect_DR = 0
+
+	# Set a standarid speaking level
+	# (level set at startup window)
+	#   (avoid this if you have long stretches of silence 
+	#    in your sound)
+		override_speaking_level = 1
+
+	# Draw the envelopes before and after DR compression
+	# low-pass filter the envelopes at this rate:
+		envelope_draw_LPF = 60
+
+	# save the envelopes for inspecting and plotting
+		save_envelopes = 0
+	
+	
+	# Report timing of individual procedures 
+	# (Hilbert, intensity frames, etc.)
+	# to see how much each computation contributes 
+	# to the while processing time
+		report_timing = 0
+
+endproc
+

@@ -19,7 +19,7 @@ df_spectrogram <- my_spect_file %>%
   convert_spectrogram_to_df() %>%
   pre_emphasize() %>% # creates Column `Level_preemp`
   constrain_dynamic_range(column = "Level_preemp",
-                          dynamic_range = 95)
+                          dynamic_range = 120)
 
 summary(df_spectrogram$Level)
 summary(df_spectrogram$Level_preemp)

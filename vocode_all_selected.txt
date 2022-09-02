@@ -5,8 +5,8 @@
 # or all sounds in a specified folder
 # Matthew Winn
 # 
-# Version 44
-# January 2021
+# Version 47
+# August 2022
 #
 #---------------------------------------------------------------------------
 # Brief description: flexible vocoder that can be customized for specific:
@@ -80,7 +80,7 @@
 #----------------------------------------------------------------------------
 # ROLLOFF PER MM
 # Choose the width of the synthesis filter in dB per mm
-#    anything below 10 will be quite distorted, while
+#    anything below 6 will be quite distorted, while
 #    anything above 20 will usually sound pretty clear.
 #    super-high numbers (> 90) will sound more like distorted sinewave vocoders
 #   ** NOTE: This option will only be implemented if you selected "peaked"
@@ -179,14 +179,17 @@
 # indicating many (but nto all) the parameters that were used. 
 #----------------------------------------------------------------------------
 # CUSTOM AND PRE-LOADED FREQUENCY-ALLOCATION TABLES
-# You can also simulate the frequency allocation table used by the 
-#   Nucleus family of devices produced by the Cochlear Corporation
-# by selecting the 'simulate cochlear map' startup option.
-# by selecting the Cochlear frequency table option, 
+# You can also simulate the frequency allocation table used by various 
+# cochlear implant manufacturers, although there are limitations. 
+# These are just frequency tables, and it is not an indication
+# that Praat is handling the sound in the same way that a CI processor does. 
+# In fact, we KNOW that it is different. Praat uses FFT filters, 
+# but not all the CI processors do this. 
+# so this is just a rough approximation of the filter channels,
+# and does not simulate the placement of the device in the ear. 
+#
+# If you select one of the custom frequency table options, 
 # your custom settings in the script will override your startup window settings. 
-#  (note that this is NOT the actual method that Cochlear uses in their devices;
-# I'm only trying to replicate some basic frequency filtering elements
-#  using some basic Praat procedures.
 #---------------------------------------------------------------------------
 # A module has been added to simulate partial tripolar (PTP) stimulation
 #    as found in the Advanced Bionics device. 
@@ -204,6 +207,12 @@
 #    so if you choose the custom table, your input settings don't matter,
 #    so don't bother typing them in. 
 #----------------------------------------------------------------------------
+# Update version 47: Updated various things for speed, 
+# and updated the style of code from camelCase to snake_case. 
+# Also changed default filter side bandwidth to 20 instead of 50 Hz. 
+# but note that if you have a large number of channels,
+# then your channel widths will be narrower than the filter,
+# so that will cause some weird filtering. a
 #############################################################################
 #
 #
@@ -229,8 +238,8 @@ comment overall upper and lower corner frequencies
   real highCornerFreq 8000
 
 comment number of analysis & synthesis channels (n-of-m)
-   integer numberStimulated 1
-   integer numberOfChannels 1
+   integer numberStimulated 12
+   integer numberOfChannels 12
 
 
 comment synthesis filter parameters
@@ -267,8 +276,6 @@ real compression_mult 1
   
   #comment time bins for peak-picking option
    real time_bins_for_peak_picking_(ms) 30
-
-#window_refresh_rate
   
 # run all sounds in a whole folder? 
   boolean run_folder 0
@@ -844,6 +851,9 @@ procedure make_carriers
 		elsif carrier_type$ = "toneComplex"
 			         # make tone complex here
 			         # to be narrowband filtered later
+					 # however, this process might be sped up by not creating the *full* broadband sound;
+					 # only generate the harmonics that are needed for this channel
+					 # since the sound-generating process is a slow point
 			         Create Sound as tone complex: "carrier", 0, end, samplerate, "Sine", pulseRate, 0, 0, 0
 			  
 		elsif carrier_type$ = "sinewave"
@@ -864,14 +874,17 @@ procedure make_carriers
 	# CREATE CARRIER CHANNELS FOR EACH FREQUENCY BAND
 	for .thisChannel from 1 to numberOfChannels
 		    if verbose == 1
-			print creating carrier for channel '.thisChannel''newline$'
-		     endif
+				print creating carrier for channel '.thisChannel''newline$'
+		    endif
 	    #===============================================================#
 	    # SINEWAVE CARRIER
 		if carrier_type$ == "sinewave"
 			cf = carrier_freq_center_'.thisChannel'
 			call make_sinewave cf end samplerate carrier
 		endif
+		
+		#===============================================================#
+	    # ORIGINAL SOUND AS CARRIER
 		if carrier_type$ == "original_sound"
 			select Sound 'name$'
 			Copy... carrier
@@ -936,17 +949,20 @@ procedure make_carriers
 				Formula... self[col] * Sound_channel_'.thisChannel'_ENV_step_3_LPF[col]
 			endif
 
+	    #===============================================================#
 	    # NB NOISE OR SINEWAVE CARRIER: THE FILTERING PART
 	    # Filter the output channel to match the desired bandwidth
-		 call filter_carrier_channel .thisChannel
+			call filter_carrier_channel .thisChannel
 			# yields "carrier_channel_'.thisChannel'"
+	    #===============================================================#
 		 
-
-		 if carrier_type$ = "sinewave"
+	    #===============================================================#
+		# CLEANUP
+		 if carrier_type$ == "sinewave"
 			select Sound carrier
 			Remove
 		 endif
-		 if carrier_type$ = "original_sound"
+		 if carrier_type$ == "original_sound"
 		 	select Sound carrier
 		 	Remove
 		 endif
@@ -1156,7 +1172,7 @@ procedure make_LNN_ERB cf .duration .samplerate .newname$
 	.freq_lower = cf - (erb_width/2) + 5
 	.freq_upper = cf + (erb_width/2) - 5
 
-	skirt = 10
+	lnn_sidebandwidth = 10
 	target_intensity = 60
 
 	# divide by envelope, repeat filtering  
@@ -1166,7 +1182,7 @@ procedure make_LNN_ERB cf .duration .samplerate .newname$
 
 	# initiate a starting sound
 		select Sound 'original_sound$'
-		Filter (pass Hann band): .freq_lower, .freq_upper, skirt
+		Filter (pass Hann band): .freq_lower, .freq_upper, lnn_sidebandwidth
 		Rename... 'original_sound$'_LNN_0
 		Scale intensity... target_intensity
 
@@ -1283,7 +1299,7 @@ endproc
 procedure modify_ENV .name$ env_LPF .method$ .keep_periodicity .scramble_mix .suffix$ .draw
   # constants
    #compression = 0.5
-   env_skirt = 10
+   env_sidebandwidth = 10
    #.draw = 0
    cleanup_comparison = 1
    .clean_mix = 1 - .scramble_mix
@@ -1299,13 +1315,13 @@ procedure modify_ENV .name$ env_LPF .method$ .keep_periodicity .scramble_mix .su
   # obtain the periodicity envelope 
 		# (everything above the LF envelope cutoff)
 		# highpass the modified envelope to get periodicity spectrum
-		Filter (pass Hann band): env_LPF, 600, env_skirt
+		Filter (pass Hann band): env_LPF, 600, env_sidebandwidth
 		Rename... '.name$'_periodicity_envelope
 		#print ... periodicity 
 
 	# lowpass to get the slow envelope
 		selectObject: "Sound '.name$'"
-		Filter (pass Hann band): 0, env_LPF, env_skirt
+		Filter (pass Hann band): 0, env_LPF, env_sidebandwidth
 		Rename: "'.name$'_envelope_LPF"
 
    # modify the LF envelope
@@ -1503,25 +1519,23 @@ procedure divideIntoAnalysisChannels .name$
    	    Copy... '.name$'_to_analyze
 	
    # extract each analysis channel using a sequence of FFT filters
-      # with 50 Hz skirt
-     for .thisChannel from 1 to numberOfChannels
-	#print Creating channel '.thisChannel' analysis channel 'newline$'
-	low = analysis_freq_low_'.thisChannel'
-	high = analysis_freq_high_'.thisChannel'
-	width = 50
+    for .thisChannel from 1 to numberOfChannels
+		#print Creating channel '.thisChannel' analysis channel 'newline$'
+		low = analysis_freq_low_'.thisChannel'
+		high = analysis_freq_high_'.thisChannel'
 
-	select Sound '.name$'_to_analyze
-	Filter (pass Hann band)... low high width
-	select Sound '.name$'_to_analyze_band
-	Rename... '.name$'_channel_'.thisChannel'
-     endfor
+		select Sound '.name$'_to_analyze
+		Filter (pass Hann band)... low high filter_sideband_width
+		select Sound '.name$'_to_analyze_band
+		Rename... '.name$'_channel_'.thisChannel'
+    endfor
      
    # cleanup
         select Sound '.name$'_to_analyze
         Remove
 endproc
 
-procedure filterMMRolloff .name$ .cf .rolloff.per.mm .suffix$
+procedure filter_mm_rolloff .name$ .cf .rolloff.per.mm .suffix$
    # this procedure filters the carrier channel 
    # to have a rolloff in terms of dB/mm in cochelar space 
    # Greenwood cochlea parameters set elsewhere in the script
@@ -1541,7 +1555,7 @@ procedure filter_carrier_channel .thisChannel
 			cf = carrier_freq_center_'.thisChannel'
 			
 			# filter spectral slope 
-				call filterMMRolloff broad_carrier_channel_'.thisChannel'_w_ENV cf rolloff.per.mm _filt
+				call filter_mm_rolloff broad_carrier_channel_'.thisChannel'_w_ENV cf rolloff.per.mm _filt
 				Rename... carrier_channel_'.thisChannel'
 
 		elsif shape$ == "square"
@@ -1555,7 +1569,7 @@ procedure filter_carrier_channel .thisChannel
 			filt_low = carrier_freq_low_'.thisChannel'
 			filt_high = carrier_freq_high_'.thisChannel'
 
-			call bandpass broad_carrier_channel_'.thisChannel'_w_ENV filt_low filt_high 20 carrier_channel_'.thisChannel'
+			call bandpass broad_carrier_channel_'.thisChannel'_w_ENV filt_low filt_high filter_sideband_width carrier_channel_'.thisChannel'
 
 		elsif shape$ == "LNN"
 			# here's where we should do an LNN procedure.
@@ -1563,7 +1577,7 @@ procedure filter_carrier_channel .thisChannel
 			# centered at the center frequency of the channel. 
 			freq_high = make_LNN_ERB.freq_upper
 			freq_low = make_LNN_ERB.freq_lower
-			call bandpass broad_carrier_channel_'.thisChannel'_w_ENV freq_low freq_high 20 carrier_channel_'.thisChannel'
+			call bandpass broad_carrier_channel_'.thisChannel'_w_ENV freq_low freq_high filter_sideband_width carrier_channel_'.thisChannel'
 			
 			select Sound carrier
 			Remove
@@ -1574,7 +1588,7 @@ procedure filter_carrier_channel .thisChannel
 			# centered at the center frequency of the channel. 
 			freq_high = calculate_LNN_ERB_edges.freq_upper
 			freq_low = calculate_LNN_ERB_edges.freq_lower
-			call bandpass broad_carrier_channel_'.thisChannel'_w_ENV freq_low freq_high 20 carrier_channel_'.thisChannel'
+			call bandpass broad_carrier_channel_'.thisChannel'_w_ENV freq_low freq_high filter_sideband_width carrier_channel_'.thisChannel'
 			
 			select Sound carrier
 			Remove
@@ -1587,16 +1601,19 @@ procedure filter_carrier_channel .thisChannel
 			
 			.freq_lower = cf - (erb_width/2) + 5
 			.freq_upper = cf + (erb_width/2) - 5
-			call bandpass broad_carrier_channel_'.thisChannel'_w_ENV .freq_lower .freq_upper 20 carrier_channel_'.thisChannel'
+			call bandpass broad_carrier_channel_'.thisChannel'_w_ENV .freq_lower .freq_upper filter_sideband_width carrier_channel_'.thisChannel'
 
 		elsif shape$ == "original"
 			# channel already created: '.name$'_channel_'.thisChannel'
-			
-			# Apply the envelope
+			# select the filtered band from the input
 				select Sound 'name$'_channel_'.thisChannel'
 			
 			# decompose into TFS and ENV
-				call do_Hilbert_transform 'name$'_channel_'.thisChannel'
+				# old procedure: 
+				#call do_Hilbert_transform 'name$'_channel_'.thisChannel'
+				
+				# faster procedure:
+				call get_envelope_TFS_chunks 'name$'_channel_'.thisChannel'
 				#-------------------------------------#
 				# envelope is "'name$'_channel_'.thisChannel'_ENV"
 				# TFS is "'name$'_channel_'.thisChannel'_TFS"
@@ -1614,10 +1631,12 @@ procedure filter_carrier_channel .thisChannel
 			# Band-pass filter using corner frequencies that define a flat-spectrum rectangular channel
 				select Sound 'name$'_channel_'.thisChannel'_TFS_w_ENV
 				Rename... temp_to_re_filter
-				call bandpass temp_to_re_filter carrier_freq_low_'.thisChannel' carrier_freq_high_'.thisChannel' 50 broad_carrier_channel_'.thisChannel'_w_ENV
+				call bandpass temp_to_re_filter carrier_freq_low_'.thisChannel' carrier_freq_high_'.thisChannel' filter_sideband_width broad_carrier_channel_'.thisChannel'_w_ENV
 				
+				# Produce final carrier for this channel
 				Copy... carrier_channel_'.thisChannel'
 				
+				# cleanup
 				select Sound temp_to_re_filter
 				Remove
 	endif
@@ -2126,9 +2145,10 @@ procedure compress_envelope .sound$ comp_proportion .envelopeCutoffFreq
 		if verbose == 1
 			pause about compress
 		endif
+
 	#	Formula... self[col] + ((1-comp_proportion) * (maximum - self[col]) )
-		
-		Formula... if self[col] > 20 then self[col] + ((1-comp_proportion) * (90 - self[col]) ) else self[col] endif
+		# don't affect anything below 35 dB below max of 90
+		Formula... if self[col] > (90-35) then self[col] + ((1-comp_proportion) * (90 - self[col]) ) else self[col] endif
 
 		# convert back to low dB (reverse the 90 dB correction)
 		Formula... self[col] - (90 - (maximum_orig_dB))
@@ -2726,27 +2746,27 @@ procedure setParameters
 	endif
 # convert carrier spectral shape names
 	if shape == 1
-	shape$ = "peaked"
+		shape$ = "peaked"
 	elsif shape == 2
-	shape$ = "square"
+		shape$ = "square"
 	elsif shape == 3
-	shape$ = "LNN"
+		shape$ = "LNN"
 	elsif shape == 4
-	shape$ = "LNN_premade"
+		shape$ = "LNN_premade"
 	endif
 
 	if carrier_type == 1
 		carrier_type$ = "noise"
 
 	elsif carrier_type == 2
-	if shape$ != "LNN"
-		carrier_type$ = "toneComplex"
+		if shape$ != "LNN"
+			carrier_type$ = "toneComplex"
 			if pulseRate > 300
-			exit pulse rate too high! please choose a rate at 300 Hz or below
+				exit pulse rate too high! please choose a rate at 300 Hz or below
 			endif
 		else
-		carrier_type$ = "noise"
-		print Changed carrier type to "noise" for LNN carriers'newline$'
+			carrier_type$ = "noise"
+			print Changed carrier type to "noise" for LNN carriers'newline$'
 		endif
 
 	elsif carrier_type ==3
@@ -2787,7 +2807,7 @@ procedure setParameters
    endif
    
    if carrier_type$ == "sinewave"
-   # override that if it's a sinewave
+   	# override that if it's a sinewave
    	shape_label$ = "sine"
    endif
    
@@ -2894,6 +2914,9 @@ procedure setParameters
 		silence_threshold = 1e-4
 		silence_threshold = 0.0007
 
+   # filter sideband width (FFT based; shouldn't be too narrow)
+   	filter_sideband_width = 20
+
    # keep original channel frequency bands extracted from the input sound?
    	# (only do this for one or two sounds)
 		 remove_original_channels = 1
@@ -2907,7 +2930,3 @@ procedure setParameters
    
    
 endproc
-
-
-
-

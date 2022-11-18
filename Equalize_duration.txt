@@ -1,0 +1,314 @@
+#######################################################
+# Equalize signal duration
+#
+# by either stretching/shrinking the signal,
+# or by padding with silence at the beginning or end
+#
+# Matthew Winn
+# November 2022
+# version 2
+#######################################################
+
+form Equalize duration
+comment how do you want the sounds to be equalized
+   choice method: 1
+	button stretch/shrink_duration
+	button pad silence after the sound
+	button pad silence before the sound
+
+comment  
+   choice match_to_this_target: 2
+   	button longest duration in the batch
+   	button shortest duration in the batch
+   	button average duration in the batch
+   	button specific duration (in s) below
+   real optional_target_duration 0.740
+
+comment  
+   choice which_sounds: 1
+	button sounds in the object list
+	button sounds in a folder:
+
+   sentence folder C:/Users/Matt/Documents/PraatScripts/Duration_normalization/All_my_sounds
+   boolean save_files 0
+   
+   comment if saving, add this to the filename on save:
+   sentence suffix _eq
+endform
+
+########################################
+########################################
+
+clearinfo
+
+# if your output sounds weird, check these pitch settings
+	minpitch = 75
+	maxpitch = 400
+
+
+remove_new_files = 1
+
+# logic check
+	call check_choice_compatibility
+
+# measure all the durations of the sounds
+call get_all_durations 'which_sounds$'
+	max_duration = get_all_durations.max_duration
+	max_duration_rounded = get_all_durations.max_duration_rounded
+
+# make sure longest duration will support user's choice
+	call check_longest_duration_compatibility
+	
+
+# set target duration
+	if match_to_this_target$ == "longest duration in the batch"
+		target_duration = get_all_durations.max_duration
+		sub_folder_name$ = "eq_dur_max"
+	
+	elsif match_to_this_target$ == "shortest duration in the batch"
+		target_duration = get_all_durations.min_duration
+		sub_folder_name$ = "eq_dur_min"
+	
+	elsif match_to_this_target$ == "average duration in the batch"
+		target_duration = get_all_durations.mean_duration
+		sub_folder_name$ = "eq_dur_mean"
+	
+	elsif match_to_this_target$ == "specific duration (in s) below"
+		target_duration = optional_target_duration
+		target_duration_ms = round(target_duration*1000)
+		
+		folder_label$ = "'target_duration_ms'"
+		if target_duration_ms < 1000
+			folder_label$ = "0'target_duration_ms'"
+		endif
+		if target_duration_ms < 100
+			folder_label$ = "00'target_duration_ms'"
+		endif
+		sub_folder_name$ = "eq_dur_target_'folder_label$'"
+	endif
+	
+if save_files == 1
+print saving files'newline$'
+	# make the directory for the new sounds
+	system mkdir "'folder$'/'sub_folder_name$'"
+endif
+
+# cycle through the sounds, alter each one
+	if which_sounds$ == "sounds in the object list"
+		# sounds have already been numbered by previous procedure
+		for thisSound from 1 to numberOfSelectedSounds
+			select sound'thisSound'
+			name$ = selected$("Sound")
+			call alter_sound 'name$'
+		endfor
+
+
+	elsif which_sounds$ == "sounds in a folder:"
+		# list the sounds in the folder
+		Create Strings as file list: "fileList", "'folder$'\*.wav"
+		num_files = Get number of strings
+
+		for file_index from 1 to num_files
+			select Strings fileList
+			filename$ = Get string: file_index
+			Read from file: "'folder$'\'filename$'"
+			name$ = selected$("Sound")
+			call alter_sound 'name$'
+			
+			# save the sound
+			if save_files == 1
+				select Sound 'name$'_eq
+				Save as WAV file... 'folder$'/'sub_folder_name$'/'name$''suffix$'.wav
+			endif
+
+			
+			select Sound 'name$'
+			if remove_new_files == 1
+				plus Sound 'name$'_eq
+			endif
+			Remove
+		endfor	
+	endif
+
+
+#################################
+procedure alter_sound .name$
+	# get some basic info 
+	select Sound '.name$'
+	samplerate = Get sampling frequency
+	num_channels = Get number of channels
+	dur = Get total duration
+	
+	if method$ == "pad silence after the sound"
+		if dur < target_duration
+			#print using 'method$' for duration 'target_duration''newline$'
+			buffer_duration = target_duration - dur
+			Create Sound from formula... buffer num_channels 0 buffer_duration samplerate 0
+
+			select Sound '.name$'
+			plus Sound buffer
+			Concatenate
+			
+			select Sound buffer
+			Remove
+			select Sound chain
+			Rename... '.name$'_eq
+		else
+			Copy... '.name$'_eq
+		endif
+		
+	elsif method$ == "pad silence before the sound"
+		if dur < target_duration
+			#print using 'method$' for duration 'target_duration''newline$'
+			buffer_duration = target_duration - dur
+			Create Sound from formula... buffer num_channels 0 buffer_duration samplerate 0
+
+			select Sound '.name$'
+			Copy... temp
+			select Sound buffer
+			plus Sound temp
+			Concatenate
+			
+			select Sound buffer
+			plus Sound temp
+			Remove
+			select Sound chain
+			Rename... '.name$'_eq
+		else
+			Copy... '.name$'_eq
+		endif
+		
+	elsif method$ == "stretch/shrink_duration"
+		# alter using Lengthen procedure
+		#print using 'method$' for duration 'target_duration''newline$'
+		duration_ratio = target_duration/dur
+		print 'name$''tab$' with duration 'tab$''dur:3''tab$' warped by'tab$''duration_ratio:3' to match target duration of'tab$''target_duration:3''newline$'
+		select Sound '.name$'
+		Lengthen (overlap-add): minpitch, maxpitch, target_duration/dur
+		Rename: "'.name$'_eq"
+	endif
+
+
+endproc
+
+	
+ print DONE!
+
+##################################
+
+procedure get_all_durations .which_sounds$
+	# initialize table
+	Create Table with column names: "durations", 0, "sound duration"
+
+	if .which_sounds$ == "sounds in the object list"
+		pause select all sounds to be used for this operation
+		numberOfSelectedSounds = numberOfSelected ("Sound")
+
+		# number the sounds
+		   for sound_index to numberOfSelectedSounds
+			sound'sound_index' = selected("Sound",sound_index)
+		   endfor
+
+		# get duration of all sounds
+		for sound_index from 1 to numberOfSelectedSounds
+		    	select sound'sound_index'
+		    	.name$ = selected$("Sound")
+			.dur = Get total duration
+			select Table durations
+			Append row
+			row_number = sound_index
+			Set string value: row_number, "sound", .name$
+			Set numeric value: row_number, "duration", .dur
+		endfor
+				
+	elsif .which_sounds$ == "sounds in a folder:"
+		Create Strings as file list: "fileList", "'folder$'/*.wav"
+		num_files = Get number of strings
+		
+		if num_files > 0
+			for file_index from 1 to num_files
+				select Strings fileList
+				filename$ = Get string: file_index
+				Read from file: "'folder$'\'filename$'"
+				.name$ = selected$("Sound")
+				.dur = Get total duration
+				select Table durations
+				Append row
+				row_number = file_index
+				Set string value: row_number, "sound", .name$
+				Set numeric value: row_number, "duration", .dur
+				select Sound '.name$'
+				Remove
+			endfor
+		
+		else
+			exit no sounds in the folder (check the path?)
+		
+		endif
+	endif
+	
+	selectObject: "Table durations"
+	.min_duration = Get minimum: "duration"
+	.max_duration = Get maximum: "duration"
+	.mean_duration = Get mean: "duration"
+	
+	.max_duration_rounded = ceiling(.max_duration*1000)/1000
+
+endproc
+	
+
+
+
+procedure check_choice_compatibility
+   # if pad with silence, must match to longest
+   if left$(method$,3) == "pad"
+	if match_to_this_target$ == "shortest duration in the batch" || match_to_this_target$ == "average duration in the batch"
+		beginPause: "Must update your choice for target duration"
+		comment: "padding duration must match to either longest in the batch,"
+		comment: "or you can either use a specific target duration (below)"
+		   choice: "match_to_this_target" , 1
+			option: "longest duration in the batch"
+			option: "specific duration (in s) below"
+			real: "optional_target_duration", 0.74
+		clicked = endPause: "quit - abandon the procedure", "Continue", 2
+		
+		if clicked == 1
+			exit
+		endif
+	endif
+   endif
+endproc
+
+
+procedure check_longest_duration_compatibility
+# If the longest sound is longer than fixed target duration, 
+   # then you must extend the fixed target duration 
+   # This is only needed when you're padding silence;
+   # if you're shrinking & stretching, then this doesn't matter
+   
+   if left$(method$,3) == "pad"
+   	if match_to_this_target$ == "specific duration (in s) below"
+
+	   # make a version rounded to the nearest 3 digits, rounded up
+	   max_duration_rounded = ceiling(max_duration*1000)/1000
+
+
+	   while optional_target_duration < max_duration_rounded
+		beginPause: "Must update target duration"
+		comment: "your target duration is shorter than the longest sound in your batch"
+		comment: "you must either use this duration (below)"
+		comment: "or a longer duration"
+		real: "target_duration", max_duration_rounded
+		clicked = endPause: "quit - abandon the procedure", "Continue", 2
+
+		if clicked == 1
+			exit
+		endif
+
+		# update the in-use variable (optional_target_duration)
+		# with the user's new input
+		optional_target_duration = target_duration
+	   endwhile
+   	endif
+   endif
+endproc

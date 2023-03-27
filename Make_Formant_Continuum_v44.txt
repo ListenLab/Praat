@@ -1,0 +1,1753 @@
+##################################################################
+# GUI-based wizard for creating realistic vowel formant continua 
+# from modified natural speech
+#
+# version 43
+#
+# Matthew B. Winn
+# November 2022
+##################################################################
+
+form Enter settings for Formant Continuum
+
+   comment Formant and pitch analysis
+	natural Enter_number_of_steps_in_the_formant_continuum 7
+	natural Number_of_formants 4
+	natural Maximum_formant_(Hz) 4300
+	natural minimum_pitch_in_analysis_(Hz) 75
+	natural maximum_pitch_in_analysis_(Hz) 250
+
+   # select which formants you want to modify
+	boolean modify_f1 1
+	boolean modify_f2 1
+	boolean modify_f3 1
+
+   #override bandwidths?
+	boolean Override_bandwidths 1	
+   #Enter settings for frequency blending
+	real Crossover_frequency_to_restore_original_signal_(Hz) 4000
+	real Width_of_filter_crossover_(Hz) 500
+		
+   comment File settings
+      	real Enter_final_intensity_for_all_new_sounds_(dB) 70
+
+   #Enter directory path for the new files (a folder that already exists)
+	sentence Enter_parent_directory_that_already_exists C:\Users\mwinn\Desktop\Speech_continua
+
+   #Enter basic name for the folder of output files
+	sentence Basic_name_for_new_folder_for_continuum_files demo2
+
+   #Enter prefix for the filenames (to be suffixed by continuum step number)
+	sentence Enter_prefix_for_the_filenames Step_
+endform
+
+##############
+
+call convert_names_from_form
+
+call initialize_variables
+
+call select2Sounds
+
+call select_manipulation_portions
+
+call adjust_comparison_sound
+
+call select_segment precursor
+call select_segment postcursor
+
+call check_duration precursor overlap_duration
+call check_duration postcursor overlap_duration
+
+call record_durations
+
+call adjust_pitch_contour "'base$'" minpitch maxpitch
+
+call extract_lowfreq_portion "'base$'_PitchAdjusted" crossover_frequency filter_bandwidth
+
+call extract_highfreq_portion "'base$'_PitchAdjusted" crossover_frequency filter_bandwidth
+
+call make_source_residual "'base$'_PitchAdjusted" samplerate
+
+call check_source_residual
+
+call match_intensity_contour "'base$'_PitchAdjusted_SOURCE" 'base$'_PitchAdjusted_LP_portion 1 'blank$'
+
+call make_vocaltract_filter "'base$'" num_formants max_formant_frequency window_length
+     if comparison_choice != 2
+     # make a copy of the same formant grid to manually alter
+	 call make_vocaltract_filter "'comparison$'_Matched" num_formants max_formant_frequency window_length
+     endif
+
+call clean_up_formantgrid_points
+
+call set_bandwidths
+
+call make_point_vowels
+
+call check_formant_grid 'base$'
+
+call check_reference_grid
+
+call recheck_formant_grids
+
+call up_to_formant_grid "'base$'" no
+call up_to_formant_grid "'comparison$'_Matched" no
+
+call make_formantgrid_continuum
+
+call source_filter_resynth
+
+call make_source_filter_lowfreq_portions
+
+#call match_lowfreq_intensities
+
+call blend_highpass_portion
+call blend_lowpass_portion
+
+call retain_original_intensity_contours
+
+call extract_manipulated_section
+
+call concatenate_sections
+
+call assemble_continuum_to_display
+
+call draw_formant_tracks
+
+call draw_spectra
+
+call print_continuum_info
+
+call print_formant_values
+
+call clean_up_intermediate_objects
+
+call initiate_save
+
+call display_continuum
+
+#
+#
+##
+###
+#####
+########
+#############
+#####################
+################################## 
+############################################ PROCEDURES 
+
+procedure make_point_vowels
+    # uses the "whitened" voice source and makes a set of vowels that should be
+    # easily recognizable as point vowels, and schwa. 
+    # if the user hears the quality of the original vowel (from the base sound),
+    # then the source "whitening" did not work well. 
+	select FormantGrid 'base$'
+	Copy... Blank
+	for this_formant from 1 to num_formants
+		call clear_formantgrid_points Blank 'this_formant' 0 base_duration
+		Remove bandwidth points between... 'this_formant' 0 base_duration
+		start_manipulation_'base$'
+	endfor
+
+    # make the vowels
+	call make_vowel Blank 'base$_PitchAdjusted_SOURCE Point_i 290 2350 2600 3500 70
+	call make_vowel Blank 'base$_PitchAdjusted_SOURCE Point_a 800 1150 2400 3400 70
+	call make_vowel Blank 'base$_PitchAdjusted_SOURCE Point_u 350 800 2300 3100 70
+	call make_vowel Blank 'base$_PitchAdjusted_SOURCE Neutral_schwa 500 1500 2500 3500 70
+
+    # put the vowels together
+	select Sound Point_i
+	plus Sound Point_a
+	plus Sound Point_u
+	plus Sound Neutral_schwa
+	Concatenate recoverably
+	select Sound chain
+	Rename... Point_vowels
+	select TextGrid chain
+	Rename... Point_vowels
+	select Sound Point_vowels
+	plus TextGrid Point_vowels
+	View & Edit
+	beginPause ("Check for good resynthesis")
+		comment ("Listen to these vowels to ensure good resynthesis.")
+		comment ("They should sound like /i/, /a/ /u/ and schwa.")
+	
+	endPause ("Cancel", "OK", 2)
+	
+	# close this window, if the user didn't already close it
+		nocheck editor TextGrid Point_vowels
+		nocheck Close
+		nocheck endeditor
+endproc
+
+
+procedure make_vowel .formantGrid$ .source$ .vowelName$ .f1 .f2 .f3 .f4 .intensity
+	# This generates a vowel with steady formants,
+	# using a pre-made source and filter
+	#
+	# it's just used to generate recognizable vowels
+	# so that you can check to see if the residual source
+	# is good enough to produce new vowels. 
+	#
+	#
+	# use same F5 for all vowel inputs
+		.f5 = 4500
+		select FormantGrid '.formantGrid$'
+		Copy... '.vowelName$'
+	
+	# populate the new FormantGrid with formant values (input arguments)
+	    for .this_formant from 1 to num_formants
+		select FormantGrid '.vowelName$'
+		Add formant point... '.this_formant' 0 .f'.this_formant'
+		Add bandwidth point... '.this_formant' 0.1 (60+(10*'.this_formant'))
+	   endfor
+	
+	# filter the source
+	    select Sound 'base$'_PitchAdjusted_SOURCE
+		plus FormantGrid '.vowelName$'
+		Filter
+		Rename... '.vowelName$'
+	
+	# add high-frequency energy (from the original base sound) to the vowel
+		Formula... self [col] + Sound_'base$'_PitchAdjusted_HPportion [col]
+	
+	# zero out everything around the manip portion
+		do ("Set part to zero...", 0, start_manipulation_'base$', "at nearest zero crossing")
+		do ("Set part to zero...", end_manipulation_'base$', base_duration,"at nearest zero crossing")
+		Scale intensity... '.intensity'
+	
+	# cleanup
+		select FormantGrid '.vowelName$'
+		Remove
+endproc
+	
+
+procedure initiate_save
+	beginPause ("Save files?")
+	comment ("Do you want to save the new sound files & continuum info?")
+
+    choice ("Save", 1)
+       option ("Yes, save")
+       option ("No, do not save")
+     endPause ("Cancel", "OK", 2)
+
+	if save = 1
+		call save_files
+	endif
+endproc
+
+procedure save_files
+	# save a text file that contains all the details of the script-running process
+	# as well as a list of files that were created.
+	#
+	call make_directories
+	call save_info_window "'parent_dir$'/'new_subfolder$'" 'output_filename$'
+	call save_sound_files
+	call make_file_list "'parent_dir$'/'new_subfolder$'/Stimuli/" 'listName$'
+	
+	# save the formant tables
+	selectObject: "Table formants_long"
+	Save as comma-separated file: "'parent_dir$'/'new_subfolder$'/formant_table_long.csv"
+	selectObject: "Table formants_wide"
+	Save as comma-separated file: "'parent_dir$'/'new_subfolder$'/formant_table_wide.csv"
+
+endproc
+	
+procedure save_sound_files
+	# Save the sound files that were used during the running of the script
+	# including the original sounds, new stimuli,
+	# voice source, and the high-pass portion
+	#
+    # first, adjust numeric name of the continuum step to permit 
+    # easy alphabeticization of one- and two-digit numbers
+    # i.e. '2' becomes '02' so that 10 doesn't get ordered before 2. 
+	for this_step from 1 to 'number_of_formant_steps'
+		if number_of_formant_steps > 9
+		   if this_step < 10
+			tempStep$ = "0'this_step'"
+		   else   
+			tempStep$ = "'this_step'"
+		   endif
+		else
+		   tempStep$ = "'this_step'"
+		endif
+			select Sound 'basename$''this_step'
+			Rename... 'basename$''tempStep$'
+
+	   call save_wav_file "'basename$''tempStep$'" 'parent_dir$'/'new_subfolder$'/Stimuli/
+	   call save_formant_grid "FILTER_step_'this_step'" 'parent_dir$'/'new_subfolder$'/FormantGrids/
+	endfor
+
+	call save_wav_file "'comparison$'" 'parent_dir$'/'new_subfolder$'/Original_sounds
+	call save_wav_file "'base$'" 'parent_dir$'/'new_subfolder$'/Original_sounds
+	
+	call save_wav_file "'base$'_Voice_Source" 'parent_dir$'/'new_subfolder$'/FormantGrids/
+
+	call save_wav_file "'base$'_Voice_Source" 'parent_dir$'/'new_subfolder$'/FormantGrids/
+	call save_wav_file "'base$'_PitchAdjusted_VLP_portion" 'parent_dir$'/'new_subfolder$'/FormantGrids/
+	call save_wav_file "'base$'_PitchAdjusted_HPportion" 'parent_dir$'/'new_subfolder$'/FormantGrids/
+
+	call save_wav_file precursor 'parent_dir$'/'new_subfolder$'/Original_sounds
+	call save_wav_file postcursor 'parent_dir$'/'new_subfolder$'/Original_sounds
+endproc
+
+
+procedure save_formant_grid .name$ .directory$
+	select FormantGrid '.name$'
+	Save as text file... '.directory$'/'.name$'.FormantGrid
+endproc
+
+procedure save_wav_file .name$ .directory$
+	# wrapper for save function that makes it easier to read
+	# when in a long list
+	select Sound '.name$'
+	Save as WAV file... '.directory$'/'.name$'.wav
+endproc	
+
+procedure make_file_list .soundDir$ listName$
+	# list all the sound files in a directory,
+	# save it in a specified location
+	Create Strings as file list... 'listName$' '.soundDir$'
+	Save as raw text file... 'parent_dir$'/'new_subfolder$'/'listName$'.txt
+	select Strings 'listName$'
+	Remove
+endproc	
+
+
+procedure save_info_window outputDirectory$ output_filename$
+	# save all the contents of the info window
+	filedelete 'outputDirectory$'/'output_filename$'.txt
+	fappendinfo 'outputDirectory$'/'output_filename$'.txt
+endproc
+
+
+procedure make_directories
+  # makes new directories - one as the main directory and one for the stimuli
+	
+	#system mkdir 'parent_dir$'/'new_subfolder$'
+	createFolder: "'parent_dir$'/'new_subfolder$'"
+	
+	#system mkdir 'parent_dir$'/'new_subfolder$'/Stimuli
+	createFolder: "'parent_dir$'/'new_subfolder$'/Stimuli"
+	
+	#system mkdir 'parent_dir$'/'new_subfolder$'/Original_sounds
+	createFolder: "'parent_dir$'/'new_subfolder$'/Original_sounds"
+	
+	#system mkdir 'parent_dir$'/'new_subfolder$'/FormantGrids
+	createFolder: "'parent_dir$'/'new_subfolder$'/FormantGrids"
+	
+	pause directories made in 'parent_dir$'/'new_subfolder$'
+endproc
+
+
+procedure draw_formant_tracks
+	# make schematic "spectrograms" f the formant tracks
+	# so you can see how they change over time,
+	# across the whole continuum
+   Erase all
+   Select outer viewport... 0 6 0 5
+   
+   Line width... line_width
+   for this_step from 1 to 'number_of_formant_steps'
+      # create a color gradient between blue & red, based on the step number
+   	coolgradient = ('this_step'-1)/('number_of_formant_steps'-1)
+   		r = coolgradient
+   		g = 0.0
+   		b = 1-coolgradient
+	Colour... {'r','g','b'}
+   
+   	select FormantGrid FILTER_step_'this_step'
+	Draw... (start_manipulation_'base$'-0.015) (end_manipulation_'base$'+0.015) 0 max_formant_frequencyDraw no yes lines
+   endfor
+   
+   # Annotate the dotted lines (currently omitted because it creates a little clutter)
+      #One mark bottom... start_manipulation_'base$' no yes yes vowel start
+      #One mark bottom... end_manipulation_'base$' no yes yes vowel end
+endproc
+
+procedure draw_spectra
+	## draw gradient-colored smoothed spectra from each continuum step
+	# Select the area beneath the formant tracks area
+	do ("Select outer viewport...", 0, 6, 5, 9.5)
+	
+	for this_step from 1 to number_of_formant_steps
+	   # create a color gradient between blue & red, based on the step number
+	   redproportion = ('this_step'-1)/('number_of_formant_steps'-1)
+	   	# create rgb blend (starts at blue, ends at red)
+		r = redproportion
+		g = 0.0
+		b = 1-redproportion
+	   Colour... {'r','g','b'}
+
+	   select Sound 'basename$''this_step'
+		.name$ = selected$("Sound")
+		tempDur = Get total duration
+		# extract only the manipulated portion
+		do ("Extract part...", precursor_duration, (tempDur - postcursor_duration), "rectangular", 1, "no")
+		
+		To Spectrum... yes
+		# smooth the spectrum to simplify the image
+		Cepstral smoothing... 'smoothing'
+		Rename... '.name$'_part_smooth
+		select Spectrum '.name$'_part
+		Remove
+		select Spectrum '.name$'_part_smooth
+		Draw... draw_Hz_low draw_Hz_high draw_dB_low draw_dB_high yes
+		
+		# cleanup
+			select Spectrum '.name$'_part_smooth
+			plus Sound '.name$'_part
+			Remove
+	endfor
+	# re-select the formant tracks drawing
+		Select outer viewport... 0 6 0 5
+endproc
+
+procedure assemble_continuum_to_display
+  # put them all into a single annotated sound so that they can be viewed & heard together
+	select Sound 'basename$'1
+	for this_step from 2 to 'number_of_formant_steps'
+	   plus Sound 'basename$''this_step'
+	endfor
+	Concatenate recoverably
+	
+	select Sound chain
+	Rename... 'basename$'Continuum
+	select TextGrid chain
+	Rename... 'basename$'Continuum
+endproc
+
+
+procedure display_continuum
+	# call it up to view,
+	# unless it's too many sounds for the screen to feasibly display
+   if number_of_formant_steps < 15
+	select Sound 'basename$'Continuum
+	plus TextGrid 'basename$'Continuum
+	do ("View & Edit")
+   else
+   	pause Too many formant steps to show all at once   
+   endif
+endproc
+
+procedure clean_up_intermediate_objects
+  # clean up all the remaining objects in the list
+	select IntensityTier lowpass_portion
+	#plus Sound precursor
+	#plus Sound postcursor
+	for n from 1 to 'number_of_formant_steps'
+	   plus Sound Step_'n'_SF
+	   plus Sound Step_'n'_SF_with_HPportion
+	   plus Sound Step_'n'_middle
+	endfor
+	if comparison_choice=1
+		#plus Manipulation 'comparison$'
+		#plus DurationTier 'comparison$'
+		plus Sound 'comparison$'_Matched
+		plus Formant 'comparison$'_Matched
+	endif
+	#plus Sound 'base$'_PitchAdjusted_HPportion
+	plus Sound 'base$'_PitchAdjusted
+	#plus Sound 'base$'_PitchAdjusted_SOURCE
+	plus Formant 'base$'
+	Remove
+	
+	select Sound 'base$'_PitchAdjusted_SOURCE
+	Rename... 'base$'_Voice_Source
+endproc
+
+procedure select_manipulation_portions
+	# have the user point & click on landmakrs
+	# that will be used to define the region of the sound
+	# that will be manipulated in the script. 
+	# always select landmarks for the base sound
+	call select_manipulation_portion 'base$'
+
+	   # select landmarks for the comparison sound IF you chose a comparison sound
+	      if comparison_choice != 2
+			call select_manipulation_portion 'comparison$'
+		 else
+		   	comparison$ = "'base$'"
+	      endif
+	manipulation_duration = end_manipulation_'base$' - start_manipulation_'base$' 
+endproc
+
+procedure check_duration .name$ .duration
+  # ensure that a segment is at least as long as that required for temporal overlap. 
+   select Sound '.name$'
+   .tempdur = Get total duration
+     if .tempdur <= (.duration/2)
+	# sound must be expanded
+	beginPause ("Duration")
+	comment ("The duration of your '.name$' object is shorter than what is required")
+	comment ("for cross-fading (per your overlap_duration.)")
+	comment ("The segment must be greater than half the overlap_duration.")
+	comment ("You can start over and adjust the overlap_duration in the script (bottom)")
+	comment ("or choose one of the following options")
+
+       choice ("alter_segment", 1)
+          option ("Add extra silence to the '.name$' segment")
+          option ("Shorten the overlap duration")
+
+        endPause ("Cancel", "OK", 2)
+
+	if alter_segment = 1
+		target_duration = overlap_duration+0.0001
+		if .name$ == "precursor"
+		   # if it's the precursor, put the silence before the sound
+		   call add_onset_silence precursor target_duration
+		else
+		   # if it's the postcursor, put the silence after the sound. 
+		   call add_offset_silence postcursor target_duration
+		endif
+	else
+		# increase the overlap duration to half the segment duration, minus a little bit
+		overlap_duration = (.tempdur*2)-0.00001
+	endif
+   endif
+endproc
+
+procedure record_durations
+   # establish variables to be used later in the script
+	select Sound precursor
+		precursor_duration = Get total duration
+	select Sound postcursor
+		postcursor_duration = Get total duration
+endproc
+
+procedure add_offset_silence .name$ .target_duration
+	select Sound '.name$'
+	.num_channels = Get number of channels
+	Copy... temp
+	select Sound '.name$'
+	Remove
+	do ("Create Sound from formula...", .name$, .num_channels, 0, .target_duration, samplerate, "0")
+	formula... self [col] + Sound_temp [col]
+	select Sound temp
+	Remove
+endproc
+	
+procedure add_onset_silence .name$ .target_duration
+	select Sound '.name$'
+	.tempdur = Get total duration
+	.num_channels = Get number of channels
+	.dur_silence_to_add = .target_duration - .tempdur
+	do ("Create Sound from formula...", "bufferSilence", .num_channels, 0, .dur_silence_to_add, samplerate, "0")
+	select Sound '.name$'
+	Copy... temp
+	select Sound bufferSilence
+	plus Sound temp
+	Concatenate
+	
+	select Sound bufferSilence
+	plus Sound temp
+	plus Sound '.name$'
+	Remove
+	
+	select Sound chain
+	Rename... '.name$'
+endproc
+
+procedure concatenate_sections
+	# combine the precursor, manipulated sound, and postcursor
+	# and blend together with crossfading window
+	
+    # first, ensure that the postcursor is the last item in the list,
+    # so that it will be appended at the end. 
+    select Sound postcursor
+    Copy... temp_postcursor
+   	for this_step from 1 to 'number_of_formant_steps'
+		select Sound precursor
+		plus Sound Step_'this_step'_middle
+		plus Sound temp_postcursor
+		if overlap_duration > 0
+			# Concatenate with cross-fade
+			Concatenate with overlap... overlap_duration
+		else
+		
+			# If the overlap duration is 0, concatenate with no blending.
+			# if you accidentally set it to be a negative number, 
+			#   it is coerced to be zero here.
+			overlap_duration = 0
+			Concatenate
+		endif
+		Rename... 'basename$''this_step'
+	
+		Scale intensity... 'final_intensity'
+	endfor	
+   # remove temporary end-of-list postcursor sound object
+   select Sound temp_postcursor
+   Remove
+endproc
+
+procedure extract_manipulated_section
+   # extract only the manipulation portion (user-defined region)
+   # from the re-filtered sounds
+   for this_step from 1 to 'number_of_formant_steps'
+	select Sound Step_'this_step'_SF_with_HPportion_w_Vlowpass_portion
+	Extract part... start_manipulation_'base$' end_manipulation_'base$' rectangular 1 no
+	Rename... Step_'this_step'_middle
+   endfor
+endproc
+
+
+procedure retain_original_intensity_contours
+   # Each step in the continuum is matched to the intensity contour from the original base sound
+   # This step occurs before the manipulated portion is boxed out,
+   # because the user might use a different segment for the
+   # leading / trailing segment. 
+   for this_step from 1 to 'number_of_formant_steps'
+	call match_intensity_contour "Step_'this_step'_SF_with_HPportion_w_Vlowpass_portion" 'base$' 1 'blank$'
+   endfor
+endproc
+
+
+procedure blend_highpass_portion
+   # add the high-frequency portion from the original base sound
+   # to the low-passed re-filtered continuum steps. 
+   # this just adds naturalness and full spectral bandwidth. 
+   for this_step from 1 to 'number_of_formant_steps'
+	select Sound Step_'this_step'_SF_LP
+	Formula... self [col] + Sound_'base$'_PitchAdjusted_HPportion [col]
+	Rename... Step_'this_step'_SF_with_HPportion
+   endfor
+endproc
+
+procedure blend_lowpass_portion
+   # add the very-low-frequency portion from the original base sound
+   # to the low-passed re-filtered continuum steps. 
+   # this ensures that you will avoid any weird filtering problems
+   # that produce strange super-low frequency components
+   # in the output. 
+   for this_step from 1 to 'number_of_formant_steps'
+	select Sound Step_'this_step'_SF_with_HPportion
+	# omit the very low frequencies
+	Filter (stop Hann band)... 0 vlp_cutoff vlp_filter_bandwidth
+	# add the original low frequencies
+	Formula... self [col] + Sound_'base$'_PitchAdjusted_VLP_portion [col]
+	Rename... Step_'this_step'_SF_with_HPportion_w_Vlowpass_portion
+   endfor
+endproc
+
+
+procedure match_lowfreq_intensities
+   # Ensure that the manipulated portion of each continuum step
+   # has an intensity contour that matches that of the 
+   # corresponding frequency region in the original base sound. 
+   
+   for this_step from 1 to 'number_of_formant_steps'
+	select Sound Step_'this_step'_SF_LP
+	Scale intensity... 'original_LP_intensity'
+   endfor
+endproc
+
+
+procedure make_source_filter_lowfreq_portions
+   # "Make source-filter low-pass portions"
+   # Take the re-filtered sound,
+   # low-pass filter it so that only the frequency region chosen for manipulation
+   # is present in the re-filtered signal. 
+   # Higher-frequency portions are restored from the original signal
+   # in a later procedure.
+   for this_step from 1 to 'number_of_formant_steps'
+	select Sound Step_'this_step'_SF
+	Filter (pass Hann band)... 0 crossover_frequency filter_bandwidth
+	Rename... Step_'this_step'_SF_LP
+	Scale intensity... 'original_LP_intensity'
+   endfor
+endproc
+
+procedure check_source_residual
+   # check for "whiteness" of voice source spectrum. 
+   # this step might be removed, as it is effectively replaced by the 
+   # "make_vowels" procedure. 
+   # However, this is the user's chance to filter the signal, 
+   # in case they want to deliberately change the spectral slope,
+   # or remove a spurious peak. 
+	beginPause ("Check source")
+	   comment ("For advanced users (optional): ")
+	   comment ("Check the Source sound object for sound quality")
+	   comment ("It should be devoid of any perceptible vowel quality.")
+	   comment ("If you can clearly hear the original vowel, ")
+	   comment ("consider switching which sound is the base / which is the comparison")
+	   endPause ("Cancel", "OK, I'm done", 2, 2)
+endproc
+
+procedure source_filter_resynth
+   # filter the voice source by each step in the formant continuum.
+   for this_step from 1 to 'number_of_formant_steps'
+	select Sound 'base$'_PitchAdjusted_SOURCE
+	plus FormantGrid FILTER_step_'this_step'
+	Filter
+	Rename... Step_'this_step'_SF
+   endfor
+endproc
+
+
+procedure make_formantgrid_continuum
+   # create as many formantgrids as there are steps in the continuum,
+   # populate them with formant points
+   # so that they can be used to filter residual source sounds later. 
+   
+   # loop through the continuum steps
+   for this_formant_step to 'number_of_formant_steps'
+      
+      # create the working filter object for this step
+	select Formant 'base$'
+	Down to FormantGrid
+	Rename... FILTER_step_'this_formant_step'
+
+      # alter the formantgrid 
+	  for this_formant from 1 to num_formants
+	     # only alter it if it was selected to be altered
+	     if f'this_formant'mod = 1
+	        # First delete all the existing formant points for that formant
+		   call clear_formantgrid_points "FILTER_step_'this_formant_step'" 'this_formant' 0 base_duration
+		
+		# Next, insert the entire formant trajectory for that formant,
+		# based on the interpolation between endpoints at this continuum step. 
+		   call alter_formant_grid "FILTER_step_'this_formant_step'" "'base$'" "'comparison$'_Matched" this_formant number_of_formant_steps this_formant_step start_manipulation_'base$' end_manipulation_'base$' num_timesteps
+	     
+	     # end conditional if this formant is being manipulated
+	     endif
+	endfor
+   endfor
+endproc
+
+
+procedure alter_formant_grid .filter$ .base$ .comparison$ .formant .number_of_steps .this_step .start .end .num_timesteps
+   # Populate a formant row in a FormantGrid 
+   # across the specified number of timepoints. 
+   
+   # First, delete all formant points in this formant row 
+   	select FormantGrid '.filter$'
+   	Remove formant points between... '.formant' .start .end
+   
+   for this_time_step to .num_timesteps
+	## convert 'this_time_step' to an actual time value by interpolation
+	.num_timestepsize = ('.end' - '.start')/('.num_timesteps'-1)
+	.timepoint = (.num_timestepsize*('this_time_step'-1)) + '.start'
+	
+	# Get the formant value from the base sound
+		select Formant '.base$'
+		.formantA = Get value at time... '.formant' '.timepoint' Hertz Linear
+
+	# Get the formant value from the comparison sound
+		select Formant '.comparison$'
+		.formantB = Get value at time... '.formant' '.timepoint' Hertz Linear
+
+	# Proceed only if the formant at this timepoint is a valid number in BOTH 
+	# the base & comparison sound. 
+	if .formantA <> undefined && .formantB <> undefined
+	    if bark = 0
+		## interpolate the formant value (linear) for this step at this timepoint
+			.formantStep = ('.formantB' - '.formantA')/('.number_of_steps' - 1)
+			.formantInterp =  (.formantStep*('.this_step'-1)) + .formantA
+	    
+	    else
+	   	## interpolate the formant value (Bark) for this step at this timepoint
+	   		call freq2bark .formantA
+	   			barkA = freq2bark.out
+	   		call freq2bark .formantB
+	   			barkB = freq2bark.out
+	   		barkStep = (barkB-barkA)/('.number_of_steps' - 1)
+	   		barkInterp = (barkStep*(.this_step-1))+barkA
+	   		call bark2freq (barkInterp)
+	   		# the formant value is the product of interpolation using the bark scale
+	   		.formantInterp = bark2freq.out
+	    
+	    endif
+	  	   
+	   # Add that formant value to the FormantGrid
+			select FormantGrid '.filter$'
+			Add formant point... '.formant' '.timepoint' '.formantInterp'			
+	
+	# end conditional if both formants are not undefined
+	# i.e. if the formants at this time point are not *both* readable 
+	# in the base & comparison sound, 
+	# then do not insert a point in the FormantGrid
+	endif	
+   endfor
+endproc
+
+
+procedure up_to_formant_grid .formantGrid$ .remove_original
+   # Convert FormantGrid object to Formant object
+   # So that you can query values from it. 
+   # the second argument in the procedure is 
+   # if you want to remove the original FormantGrid from the list
+	select FormantGrid '.formantGrid$'
+	To Formant... 0.01 0.1
+	if .remove_original = 1
+		select FormantGrid '.formantGrid$'
+		Remove
+	endif	
+endproc	
+
+
+procedure recheck_formant_grids
+	pause (Optional) You can now take a moment to re-check any changes you made to the FormantGrids.
+endproc
+
+
+procedure check_formant_grid .sound$
+   # check & alter the FormantGrid and shape it into the contour that you want. 
+   select FormantGrid '.sound$'
+   View & Edit
+	editor FormantGrid '.sound$'
+	Set formant range... 0 max_formant_frequency
+	Select... (start_manipulation_'base$'-0.015) (end_manipulation_'base$'+0.015)
+	Zoom to selection
+
+	
+    # Pause window with some helpful tips
+	beginPause ("Alter the formant tracks")
+	comment ("Ensure that the formant tracks are smooth and continuous")
+	comment ("Delete any spurious points by clicking them (or highlighting a section)")
+	comment ("            and press ctrl+alt+T")
+	comment ("Add a new formant point by pressing ctrl+T")
+	comment ("Switch from one formant to another by pressing ctrl+(formant number)")
+	comment ("            (e.g. ctrl+2 for F2)")
+	comment ("   ")
+	comment (" Note: if this is the base sound and you chose to *not* manipulate")
+	comment ("    specific formants, then the contours you choose here will ")
+	comment ("    be inherited by each continuum step.")
+	comment ("   ")
+	comment (" Click OK when you are finished altering the FormantGrid")
+	endPause ("Cancel", "OK, I'm done", 2, 2)
+
+	nocheck editor FormantGrid '.sound$'
+	nocheck Close
+   endeditor
+endproc
+
+procedure check_reference_grid
+   if comparison_choice != 2
+	call check_formant_grid 'comparison$'_Matched
+   else
+   	# If the user chose to simply make an alter-able copy of one sound,
+   	# make a copy of that sound's FormantGrid,
+   	# so that the user can work with two identical filters,
+   	# and simply change the elements of interest. 
+
+	   select FormantGrid 'base$'
+	   Copy... 'comparison$'_Matched
+	# now offer the user a chance to change that into the new opposite endpoint
+	   call check_formant_gridCopy 'comparison$'_Matched
+   endif
+endproc
+
+procedure check_formant_gridCopy .sound$
+   select FormantGrid '.sound$'
+   View & Edit
+	editor FormantGrid '.sound$'
+	Set formant range... 0 max_formant_frequency
+	Select... (start_manipulation_'base$'-0.015) (end_manipulation_'base$'+0.015)
+	Zoom to selection
+
+    # pause window with helpful tips
+	beginPause ("Alter the formant tracks")
+	comment ("This is a copy of the FormantGrid that you just created")
+	comment ("You can now design a new formant contour")
+	comment ("for the opposite end of the continuum.")
+	comment ("Delete any formant points by clicking them (or highlighting a section)")
+	comment ("            and press ctrl+alt+T")
+	comment ("Add a new formant point by pressing ctrl+T")
+	comment ("Switch from one formant to another by pressing ctrl+(formant number)")
+	comment ("            (e.g. ctrl+2 for F2)")
+	comment ("   ")
+	comment (" Click OK when you are finished altering the FormantGrid")
+	#comment (" Do not close the FormantGrid window.")
+	endPause ("Cancel", "OK, I'm done", 2, 2)
+
+	nocheck editor FormantGrid '.sound$'
+	nocheck Close
+   	endeditor
+endproc
+
+
+procedure alter_formantgrid_bandwidths .sound$ .formant .endtime f1BW f2BW f3BW f4BW
+   # Override bandwidth tracking by inserting static formant bandwidth values
+	select FormantGrid '.sound$'
+	Remove bandwidth points between... '.formant' 0 .endtime
+	Add bandwidth point... .formant 0.1 f'.formant'BW
+endproc
+
+
+procedure clean_up_formantgrid_points
+   # Remove leading & trailing Formantgrid points
+   # So that the user knows exactly when the manipulation portion
+   # begins and ends. 
+   # This is mostly aesthetic, as the portions affected by this step
+   # are not included after the middle-portion extraction step. 
+   for this_formant from 1 to num_formants
+	call clear_formantgrid_points "'base$'" 'this_formant' 0 start_manipulation_'base$'
+	call clear_formantgrid_points "'base$'" 'this_formant' end_manipulation_'base$' base_duration
+		
+	if comparison_choice != 2
+	   call clear_formantgrid_points "'comparison$'_Matched" 'this_formant' 0 start_manipulation_'base$'
+	   call clear_formantgrid_points "'comparison$'_Matched" 'this_formant' end_manipulation_'base$' ref_lengthened_duration
+	endif
+   endfor
+endproc
+
+procedure set_bandwidths
+   # Check the user settings for formant bandwidth adjustment. 
+   # if bandwidth override was chosen, execute that procedure. 
+   if override_bandwidths = 1
+      for this_formant from 1 to num_formants
+	call alter_formantgrid_bandwidths "'base$'" this_formant base_duration f1BW f2BW f3BW f4BW
+      endfor
+   endif
+endproc
+
+procedure clear_formantgrid_points .formantGrid$ .formant .start .end
+	select FormantGrid '.formantGrid$'
+	Remove formant points between... '.formant' .start .end
+endproc
+
+
+procedure make_vocaltract_filter .sound$ .num_formants .max_formant_frequency .window_length
+   # Make a formant object from the sound
+   # Convert it into a FormantGrid, which the user can customize. 
+   # The resulting FormantGrid will *only* be as good as the Formant object,
+   # which is only as good as the settings used to generate it. 
+   # Those settings are user-specified. 
+	select Sound '.sound$'
+	To Formant (burg)... 0 .num_formants .max_formant_frequency .window_length 50
+	select Formant '.sound$'
+	Down to FormantGrid
+	select Formant '.sound$'
+	Remove
+endproc
+
+
+procedure match_intensity_contour .sound_to_alter$ .comparison_sound$ .remove_original .suffix$
+   # Matches the overall intensity contour of one sound to that of another sound
+   # The sounds are first aligned in the time domain. 
+   # Procedure results in Sound object named '.sound_to_alter$''.suffix$'
+	select Sound '.sound_to_alter$'
+	.original_intensity = Get intensity (dB)
+	
+	To Intensity... minpitch 0 yes
+	Down to IntensityTier
+	select Intensity '.sound_to_alter$'
+	mean = Get mean... 0 0 dB
+	
+	# future versions: avoid extreme values that throw off the intensity contour when flipped	
+		# if you end up with a sound with undefined (/infinite) intensity
+		# (you'll know because the spectrogram is all black),
+		# then this is where it went wrong. 
+		# If that occurs, create a pause after Copy... flipped
+		# and visually inspect it to find dubious extreme values
+		# that affect the mean/flipping conversion. 
+		# Also, maybe check it *after* the flip as well, just in case. 
+		# that will solve 99% of your problems. 
+    # flip the intensitycontour around its mean
+	select IntensityTier '.sound_to_alter$'
+	Copy... flipped
+	Formula... -(self-mean)
+	
+    # multiply by the flipped contour to result in a FLAT contour
+    # (a poor man's Hilbert transform)
+	select Sound '.sound_to_alter$'
+	plus IntensityTier flipped
+	Multiply... no
+	Rename... '.sound_to_alter$'_flattened
+
+    # track the intensity contour of the comparison sound
+    # (the one after which the altered sound is modeled) 
+	select Sound '.comparison_sound$'
+	To Intensity... minpitch 0 yes
+	Down to IntensityTier
+
+    #  Clean up original sound - need to do it here before the re-naming occurs
+       if .remove_original = 1
+    		select Sound '.sound_to_alter$'
+    		Remove
+	endif
+
+    # multiply the flattened sound by the comparison intensity contour
+	select IntensityTier '.comparison_sound$'
+	plus Sound '.sound_to_alter$'_flattened
+	Multiply... no
+	Rename... '.sound_to_alter$''.suffix$'
+	
+    # Match it to the overall intensity so there isn't just an overall level change. 
+	Scale intensity... '.original_intensity'
+	
+    # cleanup remaining objects
+	select Intensity '.sound_to_alter$'
+	plus IntensityTier '.sound_to_alter$'
+	plus IntensityTier flipped
+	plus Sound '.sound_to_alter$'_flattened
+	plus Intensity '.comparison_sound$'
+	plus IntensityTier '.comparison_sound$'
+	Remove
+endproc
+
+
+procedure make_source_residual .sound$ samplerate
+   # depends on: 'max_formant_frequency', 'lpc_order'
+	# "dirty" decimation - 
+	# resample based on user formant settings 
+	# this will yield the best tracking 
+	# and best spectrum "whitening"
+		lpc_upper_freq = max_formant_frequency*2
+	
+	# first, anti-alias filter
+		lpc_anti_alias_LPF = lpc_upper_freq/2
+		anti_alias_filter_bandwidth = 100
+	
+	# resample to prepare for LPC
+		select Sound '.sound$'
+		Resample... lpc_upper_freq 50
+			# yields Sound '.sound$'_'lpc_upper_freq' with weird character if it's not a whole number
+			# re-name to ensure whole number in Object name
+		Rename... '.sound$'_'lpc_upper_freq:0'
+		target_resid_intensity = Get intensity (dB)
+	
+	# create LPC object
+		To LPC (burg)... lpc_order 0.025 0.005 50
+			# yields LPC '.sound$'_'lpc_upper_freq:0'
+
+	# inverse filter the sound by the LPC to get the residual glottal source
+		select Sound '.sound$'_'lpc_upper_freq:0'
+		plus LPC '.sound$'_'lpc_upper_freq:0'
+		Filter (inverse)
+		Rename... '.sound$'_'lpc_upper_freq'_reFilt
+
+	# re-sample back up to the original sampling frequency
+	# so that it can be combined with other sounds with the original sampling frequency
+	# (The down-sampled object is never played as a wav file)
+		Resample... samplerate 50
+		Rename... '.sound$'_SOURCE
+		Scale intensity... target_resid_intensity
+
+	# cleanup
+		select Sound '.sound$'_'lpc_upper_freq:0'
+		plus Sound '.sound$'_'lpc_upper_freq'_reFilt
+		plus LPC '.sound$'_'lpc_upper_freq:0'
+		Remove
+endproc
+
+procedure adjust_pitch_contour .sound$ .minpitch .maxpitch
+   # lets the user adjust the pitch contour
+   # "Ensure accurate pulses" means that for every pitch period, 
+   # there should be a corresponding 
+	select Sound '.sound$'
+	To Manipulation... 0.01 minpitch maxpitch
+	select Manipulation '.sound$'
+	Edit
+	editor Manipulation '.sound$'
+		pause manipulate the Pitch contour to your liking. Ensure accurate pulses. Click Continue when finished
+		#Close
+	endeditor
+	select Manipulation '.sound$'
+	Get resynthesis (overlap-add)
+	Rename... '.sound$'_PitchAdjusted
+	
+	select Manipulation '.sound$'
+	Remove
+endproc
+
+
+procedure select_segment .newname$
+  # user is prompted to select a sound object from the list
+  # that object is subsequently referred to in the script
+  # by the string variable given as an input argument
+  # simply to make the script more readable. 
+	beginPause ("choose the '.newname$' to the manipulated sound")
+	comment ("I want to select the segment from...")
+
+   if comparison_choice = 1
+   # choose from among the base, comparison, another object, or silence
+       choice ("Choice", 1)
+          option ("'base$' file")
+          option ("'comparison$' file")
+          option ("Object in list")
+          option ("Silence (see below)")
+          positive ("Duration_of_silence", "0.05")
+     endPause ("Cancel", "OK", 2)
+
+   else
+      # choose from among the base, another object, or silence (no comparison)
+       choice ("Choice", 1)
+          option ("'base$' file")
+          option ("-----------------")
+          option ("Object in list")
+          option ("Silence (see below)")
+          positive ("Duration_of_silence", "0.05")
+     endPause ("Cancel", "OK", 2)
+   endif
+
+ 	if choice = 1
+ 		.sound$ = "'base$'"
+
+ 	elsif choice = 2
+ 		.sound$ = "'comparison$'"
+ 	endif
+ 	
+ 	if choice < 3
+	# user chose the base or comparison (see above)
+	# open up the sound, mark landmarks for the segment
+	   select Sound '.sound$'
+	   Edit
+	   editor Sound '.sound$'
+		# demo mode "sit/seat"
+		if demo_mode == 1
+			if .newname$ == "precursor"
+				Select... 0 0
+			endif
+			if .newname$ == "postcursor"
+				Select... 0.424841 0.424841
+			endif
+		endif
+
+		pause Get start of the segment to become the '.newname$' THEN click Continue
+		Move cursor to nearest zero crossing
+		.start = Get cursor
+
+		# demo mode "sit/seat"
+		if demo_mode == 1
+			if .newname$ == "precursor"
+				Select... 0.266902 0.266902
+			endif
+			if .newname$ == "postcursor"
+				Select... 0.734376 0.734376
+			endif
+		endif
+
+		pause Get end of the '.newname$' segment THEN click Continue
+		Move cursor to nearest zero crossing
+		.end = Get cursor
+
+		Select... '.start' '.end'
+		Move start of selection to nearest zero crossing
+		Move end of selection to nearest zero crossing
+		Extract selected sound (time from 0)
+		Close
+		endeditor
+		Rename... '.newname$'
+
+		newname_file$ = selected$ ("Sound", 1)
+		info_'.newname$'$ = "A portion of '.sound$' was used as the '.newname$' file"
+	endif	
+
+	if choice = 3
+		# user chose a sound object from the objects list
+		# that complete sound will be renamed as postcursor or precursor
+		# and resampled to match to the base sound. 
+			pause Click on your '.newname$' sound file in the list, then click Continue. 
+			newname_file$ = selected$ ("Sound", 1)
+			info'.newname$'$ = "'newname_file$' was used as the '.newname$' file"
+			Resample... 'samplerate' 50
+			Rename... '.newname$'
+	endif
+	
+	if choice = 4
+	silenceDuration'.newname$' = duration_of_silence
+	   .tempduration = silenceDuration'.newname$'
+	   call makeSilence .tempduration 'samplerate' '.newname$'
+	   	newname_file$ = selected$ ("Sound", 1)
+		info'.newname$'$ = "'.tempduration' of silence was used as the '.newname$' file"
+	endif
+	
+	select Sound '.newname$'
+	duration'.newname$' = Get total duration
+endproc
+
+
+procedure adjust_comparison_sound
+   # only do this if there *is* a comparison sound 
+   if comparison_choice != 2
+     # get the duration ratio of of manipulation portions of base & comparison sound
+	base_manipulaion_duration = end_manipulation_'base$' - start_manipulation_'base$'
+	comparison_manipulaion_duration = end_manipulation_'comparison$' - start_manipulation_'comparison$'
+	base_dur_ratio = base_manipulaion_duration/comparison_manipulaion_duration
+	base_onset_ratio = start_manipulation_'base$'/start_manipulation_'comparison$'
+
+     # Create a DurationTier that adjusts the manipulation portion by that ratio
+	   select Sound 'comparison$'
+	   To Manipulation... 0.01 minpitch maxpitch
+		Extract duration tier
+		  Add point... (start_manipulation_'comparison$'-0.00001) base_onset_ratio
+		  Add point... start_manipulation_'comparison$' base_dur_ratio
+		  Add point... end_manipulation_'comparison$' base_dur_ratio
+		  Add point... (end_manipulation_'comparison$'+0.00001) 1
+
+	# Use that DurationTier to modify the comparison sound 
+	# to match timing landmarks to the base sound
+		select Manipulation 'comparison$'
+		plus DurationTier 'comparison$'
+		Replace duration tier
+	
+	# Get the PSOLA modified version
+		select Manipulation 'comparison$'
+		Get resynthesis (overlap-add)
+		Rename... 'comparison$'_Matched
+		ref_lengthened_duration = Get total duration
+	
+	# cleanup  
+		select Manipulation 'comparison$'
+		plus DurationTier 'comparison$'
+		Remove
+endif
+endproc
+
+procedure select_manipulation_portion .sound$
+    # select landmarks for onset & offset of manipulation,
+    # record the time landmarks in the info window 
+    # establish sound-specific variable names to record the values
+	select Sound '.sound$'
+	Edit
+	editor Sound '.sound$'
+		# start of manipulation window
+		# auto-select timing landmarks 
+		# that you can declare at the bottom of the script
+		# (e.g. for "sit"/"seat")
+		# but nocheck so it doesn't act weird of these landmarks 
+		# don't exist in your sound
+			if .sound$ == base$
+				nocheck Select: quick_manip_start_1, quick_manip_start_1
+			elsif .sound$ == comparison$
+				nocheck Select: quick_manip_start_2, quick_manip_start_2
+			endif
+		# call the user
+	    pause Get start of the segment to manipulate, then click Continue
+	 	Move cursor to nearest zero crossing
+		start_manipulation_'.sound$' = Get cursor
+		temp = Get cursor
+		print '.sound$' manipulation landmark (start) = 'temp''newline$'
+	    
+	    # end
+		# auto-select timing landmarks 
+		# that you can declare at the bottom of the script
+		# (e.g. for "sit"/"seat")
+			if .sound$ == base$
+				nocheck Select: quick_manip_end_1, quick_manip_end_1
+			elsif .sound$ == comparison$
+				nocheck Select: quick_manip_end_2, quick_manip_end_2
+			endif
+	    
+	    pause Get end of the segment to manipulate, then click Continue
+		Move cursor to nearest zero crossing
+	 	end_manipulation_'.sound$' = Get cursor
+	 	temp = Get cursor
+		print '.sound$' manipulation landmark (end) = 'temp''newline$'
+	    Close
+	endeditor
+endproc	
+
+procedure makeSilence .duration .samplerate .name$
+	Create Sound from formula... '.name$' 1 0 .duration '.samplerate' 0
+endproc
+
+procedure extract_lowfreq_portion .sound$ .cutoff .filter_bandwidth
+	select Sound '.sound$'
+	Filter (pass Hann band)... 0 .cutoff .filter_bandwidth
+	original_LP_intensity = Get intensity (dB)
+	To Intensity... minpitch 0 yes
+	Down to IntensityTier
+	Rename... lowpass_portion
+	select Intensity '.sound$'_band
+	Remove
+	select Sound '.sound$'_band
+	Rename... '.sound$'_LP_portion
+	
+	# get additional *very-low* pass information
+	Filter (pass Hann band)... 0 vlp_cutoff vlp_filter_bandwidth
+	Rename... '.sound$'_VLP_portion
+
+endproc
+
+procedure extract_highfreq_portion .sound$ .cutoff .filter_bandwidth
+	## create high-pass portion of the sound 
+	select Sound '.sound$'
+		Filter (stop Hann band)... 0 .cutoff .filter_bandwidth
+		Rename... '.sound$'_HPportion
+		original_HP_intensity = Get intensity (dB)
+endproc	
+
+procedure select2Sounds
+	if demo_mode == 1
+		select Sound sit
+	endif
+	
+	pause Select the base sound
+   	base$ = selected$("Sound")
+	   samplerate = Get sampling frequency
+	   num_channels = Get number of channels
+	   base_duration = Get total duration
+	
+    # if sound is stereo, convert to mono
+     if num_channels = 2
+	   beginPause ("Warning about mono conversion ")
+		comment ("The sound that you selected is stereo")
+		comment ("This script cannot preserve dichotic channel differences")
+		comment ("so it is now a mono sound")
+	    endPause ("Cancel", "OK", 2)
+
+	   Convert to mono
+	   Rename... 'temp$'_mono
+     # establish variable names
+   	base$ = selected$("Sound")
+     endif
+	
+   beginPause ("Choose the second sound ")
+	comment ("Choose the second (comparison) sound to be used for analysis")
+	comment ("Either select a new sound in the Objects list now to serve as the referent,")
+	comment ("or just work with the sound you already selected, with no referent")
+
+    choice ("comparison_choice", 1)
+       option ("A new object from the list")
+       option ("No new sound - just modify the original base sound")    
+     endPause ("Cancel", "OK", 2)
+
+ 	if comparison_choice == 1
+ 		if demo_mode == 1
+			select Sound seat
+		endif
+ 		pause Select the comparison sound
+		   comparison$ = selected$ ("Sound")
+	else
+		#print Only one sound used for manipulation: 'base$' 'newline$'
+	endif
+endproc
+
+
+
+procedure print_continuum_info
+	# print user settings for replication, post-hoc adjustment, etc. 
+
+	appendInfoLine: "Formant continuum script information"
+	appendInfoLine: ""
+
+	appendInfoLine: "Number of steps:"
+	appendInfoLine: number_of_formant_steps
+	appendInfoLine: ""
+
+	appendInfoLine: "Number of formants analyzed"
+	appendInfoLine: number_of_formants
+	appendInfoLine: ""
+
+	appendInfoLine: "Maximum frequency for formant analysis"
+	appendInfoLine: maximum_formant
+	appendInfoLine: ""
+
+
+	appendInfoLine: "Which formants were modified"
+	appendInfoLine: "F1: ", f1mod
+	appendInfoLine: "F2: ", f2mod
+	appendInfoLine: "F3: ", f3mod
+	appendInfoLine: "F4: ", f4mod
+	appendInfoLine: "F5: ", f5mod
+	appendInfoLine: ""
+
+
+	if override_bandwidths = 1
+		appendInfoLine: "Overrode bands to be the following:"
+		appendInfoLine: "F1 bw: ", f1BW
+		appendInfoLine: "F2 bw: ", f2BW
+		appendInfoLine: "F3 bw: ", f3BW
+		appendInfoLine: "F4 bw: ", f4BW
+		appendInfoLine: "F5 bw: ", f5BW
+		appendInfoLine: ""
+	else
+		appendInfoLine: "Bandwidths were kept unaltered from original sound"
+		appendInfoLine: "F1 bw: NA"
+		appendInfoLine: "F2 bw: NA"
+		appendInfoLine: "F3 bw: NA"
+		appendInfoLine: "F4 bw: NA"
+		appendInfoLine: "F5 bw: NA"
+		appendInfoLine: ""
+	endif
+
+
+	appendInfoLine: "Pitch analysis range"
+	appendInfoLine: minimum_pitch_in_analysis
+	appendInfoLine: maximum_pitch_in_analysis
+	appendInfoLine: ""
+
+
+	appendInfoLine: "Crossover frequency to restore high frequencies from original sound"
+	appendInfoLine: crossover_frequency
+	appendInfoLine: ""
+
+	appendInfoLine: "Width of crossover frequency filter"
+	appendInfoLine: width_of_filter_crossover
+	appendInfoLine: ""
+
+
+	appendInfoLine: "upper limit of low frequencies restored from original sound:"
+	appendInfoLine: vlp_cutoff
+	appendInfoLine: "filter width for low-frequency restoration"
+	appendInfoLine: vlp_filter_bandwidth
+	appendInfoLine: ""
+
+
+	appendInfoLine: "Final intensity of outputs"
+	appendInfoLine: final_intensity
+	appendInfoLine: ""
+
+
+	appendInfoLine: "Original sampling frequency"
+	appendInfoLine: samplerate
+	appendInfoLine: ""
+
+
+	appendInfoLine: "LPC order (number of poles)"
+	appendInfoLine: lpc_order
+	appendInfoLine: ""
+
+
+	appendInfoLine: "Resample rate for LPC (freq range of the LPC poles)"
+	appendInfoLine: lpc_upper_freq
+	appendInfoLine: ""
+
+
+	appendInfoLine: "Sound selection info"
+	appendInfoLine: ""
+	
+	appendInfoLine: "Base sound selection (decomposed into source & filter)"
+	appendInfoLine: base$
+	appendInfoLine: ""
+	appendInfoLine: "Comparison sound selection (comparing formant tracks)"
+	if comparison_choice == 2
+		appendInfoLine: "NA"
+	else
+		appendInfoLine: comparison$
+	endif
+	appendInfoLine: ""
+
+	
+
+	#  print manipulation landmarks in the base sound
+	appendInfoLine: "Start of manipulation in base sound 'base$'"
+		# variable name substitution
+		temp = start_manipulation_'base$'
+		appendInfoLine: temp
+		appendInfoLine: ""
+
+	appendInfoLine: "End of manipulation in base sound 'base$'"
+		 # variable name substitution
+		temp = end_manipulation_'base$'
+		appendInfoLine: temp
+		appendInfoLine: ""
+
+
+	#  print manipulation landmarks in the comparison sound
+		if comparison_choice == 2
+			appendInfoLine: "No comparison sound; only modification of base sound 'base$'"
+			appendInfoLine: "NA"
+
+
+			appendInfoLine: ""
+			appendInfoLine: "NA"
+			appendInfoLine: ""
+		else
+
+			appendInfoLine: "Start of manipulation in comparison sound 'comparison$'"
+			# variable name substitution
+			temp = start_manipulation_'comparison$'
+			appendInfoLine: temp
+			appendInfoLine: ""
+
+			appendInfoLine: "End of manipulation in comparison sound 'comparison$'"
+			 # variable name substitution
+			temp = end_manipulation_'comparison$'
+			appendInfoLine: temp
+			appendInfoLine: ""
+
+		endif
+
+	# crossover blend time info
+	appendInfoLine: "Blend/overlap duration between leading, manipulated, and trailing segments"
+	appendInfoLine: overlap_duration
+	appendInfoLine: ""
+	
+	appendInfoLine: "Original intensity of manipulated portion"
+	appendInfoLine: original_LP_intensity
+	appendInfoLine: ""
+
+	appendInfoLine: "Method of frequency interpolation"
+		if bark == 1
+			appendInfoLine: "Bark frequency scale"
+		else
+			appendInfoLine: "Linear frequency scale"
+		endif
+	appendInfoLine: ""
+
+# REVISIT THIS FOR SURROUNDING SOUND INFO
+
+	#appendInfoLine: info_precursor$
+	#appendInfoLine: info_postcursor$
+	appendInfoLine: ""
+
+	appendInfoLine: "Destination for output files"
+	appendInfoLine: "Parent directory for file folders:"
+	appendInfoLine: parent_dir$
+	appendInfoLine: ""
+	appendInfoLine: "Folder with the output from the formant manipulation scipt"
+	appendInfoLine: new_subfolder$
+	appendInfoLine: ""
+	appendInfoLine: "Base name for the output sound files"
+	appendInfoLine: basename$
+	appendInfoLine: ""
+	
+endproc
+
+
+procedure print_formant_values
+	.number_of_formant_steps = number_of_formant_steps
+	.start = start_manipulation_'base$'
+	.end = end_manipulation_'base$'
+	.num_timesteps = num_timesteps
+	.num_timestepsize = ('.end' - '.start')/('.num_timesteps'-1)
+
+
+	# loop num_timesteps within formants
+	for .this_step from 1 to 'number_of_formant_steps'
+			select FormantGrid FILTER_step_'.this_step'
+			To Formant: 0.005, 0.1
+
+		for this_time_step to .num_timesteps
+			## convert 'this_time_step' to an actual time value by interpolation
+			.timepoint = (.num_timestepsize*('this_time_step'-1)) + '.start'
+
+			select Formant FILTER_step_'.this_step'
+				.formant_val_1 = Get value at time... 1 '.timepoint' Hertz Linear
+				.formant_val_2 = Get value at time... 2 '.timepoint' Hertz Linear
+				.formant_val_3 = Get value at time... 3 '.timepoint' Hertz Linear
+
+			# round the values for simple printing
+			if .formant_val_1 <> undefined 
+				.formant_val_1 = '.formant_val_1:0'
+			endif
+			if .formant_val_2 <> undefined 
+				.formant_val_2 = '.formant_val_2:0'
+			endif
+			if .formant_val_3 <> undefined 
+				.formant_val_3 = '.formant_val_3:0'
+			endif
+
+			# save to table
+
+
+		for .formant from 1 to 3
+			selectObject: "Table formants_long"
+			Append row
+			row_index = row_index + 1
+			Set string value: row_index, "endpoint1", base$
+			Set string value: row_index, "endpoint2", comparison$
+			Set numeric value: row_index, "step", .this_step
+			Set numeric value: row_index, "time_index", this_time_step
+			Set numeric value: row_index, "time", '.timepoint:3'
+			Set numeric value: row_index, "formant", .formant
+			Set numeric value: row_index, "frequency", .formant_val_'.formant'
+		endfor
+
+
+
+		selectObject: "Table formants_wide"
+		# only advance the row index once
+			Append row
+			row_index_wide = row_index_wide + 1
+			Set string value: row_index_wide, "endpoint1", base$
+			Set string value: row_index_wide, "endpoint2", comparison$
+			Set numeric value: row_index_wide, "step", .this_step
+			Set numeric value: row_index_wide, "time_index", this_time_step
+			Set numeric value: row_index_wide, "time", '.timepoint:3'
+			Set numeric value: row_index_wide, "f1", .formant_val_1
+			Set numeric value: row_index_wide, "f2", .formant_val_2
+			Set numeric value: row_index_wide, "f3", .formant_val_3
+
+		endfor
+	endfor
+endproc
+
+procedure bark2freq .bark
+	## uses the Hz to Bark conversion from Traunmuller (1990); 
+	## Hz to Bark: (26.81/(1+(1960/f))) - 0.53
+	## Bark to Hz: f = 1960 / [26.81 / (z + 0.53) - 1]
+	.out = 1960 / (26.81 / ('.bark' + 0.53) - 1)
+endproc
+
+procedure freq2bark .freq
+	## uses the Hz to Bark conversion from Traunmuller (1990); 
+	## Hz to Bark: (26.81/(1+(1960/f))) - 0.53
+	## Bark to Hz: f = 1960 / [26.81 / (z + 0.53) - 1]
+	.out = (26.81/(1+(1960/'.freq'))) - 0.53
+endproc
+
+procedure convert_names_from_form
+     # variable name adjustment from the input settings form 
+     # (the form name was formatted to be easily readable,
+     # and the values are assigned to variable names
+     # that are more script-friendly. 
+
+	number_of_formant_steps = enter_number_of_steps_in_the_formant_continuum
+	num_formants = number_of_formants
+	max_formant_frequency = maximum_formant
+	minpitch = minimum_pitch_in_analysis
+	maxpitch = maximum_pitch_in_analysis
+
+	
+	# don't alter the fourth formant
+	   # set to 1 if you want F4 to vary
+	   # if you don't track F4, this value wont matter. 
+	   # If F4 is above the frequency cutoff above which you blend in
+	   # energy from the original signal, this value wont matter. 
+		modify_f4 = 0
+		modify_f5 = 0
+		
+	# convert variable name from input window
+		f1mod = modify_f1
+		f2mod = modify_f2
+		f3mod = modify_f3
+		f4mod = modify_f4
+		f5mod = modify_f5
+
+	crossover_frequency = crossover_frequency_to_restore_original_signal
+
+	filter_bandwidth = width_of_filter_crossover
+
+	final_intensity = enter_final_intensity_for_all_new_sounds
+
+	basename$ = enter_prefix_for_the_filenames$
+
+	parent_dir$ = enter_parent_directory_that_already_exists$
+
+	new_subfolder$ = basic_name_for_new_folder_for_continuum_files$
+	
+	# sets output (Continuum info) file name using the basename from the folder
+		output_filename$ = "'new_subfolder$'Continuum_Info"
+
+	# sets name for the file list using the basename from the folder
+		listName$ = "'new_subfolder$'file_list"
+
+	#initialize variables - omitted now (now in-line in the script)
+		conventionalDecimate = 0
+		variableDecimate = 1
+
+endproc
+
+
+#########################################
+#########################################
+
+procedure initialize_variables
+	## set some variables for the script. 
+	## The user should adjust these as desired
+	
+	clearinfo
+	
+	# initialize the formant tables
+	Create Table with column names: "formants_long", 0, "endpoint1 endpoint2 step time_index time formant frequency"
+	Create Table with column names: "formants_wide", 0, "endpoint1 endpoint2 step time_index time f1 f2 f3"
+	row_index = 0
+	row_index_wide = 0
+
+
+	f1BW = 70
+	f2BW = 85
+	f3BW = 140
+	f4BW = 160
+	f5BW = 250
+
+	# number of timepoints to extract vowel information. Larger number means more accuracy for trajectories. 
+	   # this controls how many timepoints are comparisond from the formant tracks 
+	   # when you create the new stimuli.  
+	   # Values are interpolated between points
+	   # NOTE: if you want steady-state vowels, it is recommended
+	   # that you do not set this value to be 1, but rather
+	   # Adjust the formant tracks by hand to reflect the contour that you want.
+	   # Also, you probably want to maintain the onset & offset transitions 
+	   # out from and into the adjacent consonant sounds.
+	   # for long vowels (including vowels in open syllables),
+	   # you probably want this number to be 25 or above
+	   # in order to properly track consonant transitions.
+	   # if you're specifically interested in consonant transitions, the more the better.
+	num_timesteps = 30
+
+	# window length for formant analysis
+		window_length = 0.04
+
+	# basic boolean variables
+		yes = 1
+		no = 0
+
+	# basic blank text placehodler
+		blank$ = ""
+
+	# use bark interpolation instead of linear interpolation of formant frequencies
+	# set to 0 if you want linear interpolation
+		bark = 1
+	
+	# if you chose to modify F3 but are not tracking F3, alert the user
+	   if num_formants < 3
+		f3mod = 0 
+		pause F3 will not be manipulated because it is not being tracked (check input formant settings)
+	   endif
+
+	if crossover_frequency > max_formant_frequency
+		crossover_frequency = max_formant_frequency
+		beginPause ("Crossover filter adjusted")
+		comment ("Crossover filter adjusted downward because of formant settings. ")
+		comment ("Crossover frequency must be higher than the max frequency for formant analysis")
+		comment ("to ensure a full spectrum.")
+		endPause ("Cancel", "OK", 2, 2)
+	endif
+
+	# drawing formant tracks after the script is complete
+		max_formant_frequencyDraw = 3500
+		line_width = 2
+
+	# drawing spectra after the script is complete
+		smoothing = 250
+		draw_Hz_low = 0
+		draw_Hz_high = 6000
+		draw_dB_low = -15
+		draw_dB_high = 45
+	
+	# alter LPC parameters based on the user's input formant analysis settings
+	# LPC order = two poles for each formant in the freq range, 
+	# plus two, to add two poles for sound source (spectral tilt)
+		lpc_order = (num_formants*2)+2
+		
+		# if conventional LPC analysis, 
+		# it is almost always the case that you want at least 10 poles
+		### if you want to change it (as for chidrens' voices 
+		# or other difficult voices), change it here
+			if lpc_order < 10 
+			   if conventionalDecimate = 1
+			      lpc_order = 10
+			   endif
+			endif
+
+	
+	# restoring very low frequency info
+	   vlp_cutoff  = 120
+	   vlp_filter_bandwidth = 80
+	
+	# set overlap duration between segment onset, vowel and offset
+	  # HALF of this duration will be the length of the cross-fade time for each part
+	  # if you set this to zero, then it's a straight concatenation 
+	  # the larger this value, the smoother the transition between the segments,
+	  # but you lose some unique info in each segment (because more of it is faded out)
+		overlap_duration = 0.003
+	
+	# demo mode with sit-seat example sounds
+	demo_mode = 0
+	
+	# quickly declare onset & offset of manipulation portions
+	# for base sound:
+		quick_manip_start_1 = 0.269914
+		quick_manip_end_1 = 0.424841
+
+	# for comaprison sound
+		quick_manip_start_2 = 0.317747
+		quick_manip_end_2 = 0.487421
+endproc

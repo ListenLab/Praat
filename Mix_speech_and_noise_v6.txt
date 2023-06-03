@@ -1,0 +1,872 @@
+####################################################
+#                                                  #
+#               MIX SPEECH WITH NOISE              #
+#                                                  #
+####################################################
+# version 6
+#
+# written by  Matthew Winn
+####################################################
+# with help on the SSN sub-procedure
+# by Theo Veenker, Lisette van Delft, Hugo Quené
+# 
+# See Quené & Van Delft (2010). 
+# Speech Commun, 52, 911-918. 
+# doi:10.1016/j.specom.2010.03.005
+#
+#
+####################################################
+# Features of this script:
+#
+# Allows different noise/speech adjustment methods
+# (e.g. adjust speech fix noise, or vice versa)
+#
+# You can generate speech-shaped noise on the fly
+#    and you can make it speech-modulated noise
+# It automatically adjusts for the duration 
+#    of noise that you need for each speech sound
+#
+# It attempts to account for leading and trailing silence
+#    in your sounds by excluding those silences
+#    before calculating speech intensity
+#    (this can guard against silences messing up 
+#    your effective SNR)
+#
+# It gracefully handles non-integer SNRs in object naming
+#    and allows you to override its suggestion.
+#
+# It prevents you from overwrting your own files
+# It interrupts you if you're at risk for slowing down praat
+#    by loading and maintaining a large number of new objects
+#    as you loop through a whole folder of sounds.
+#
+# It produces some documentation 
+#    and saves it, if you are saving the sound output
+#    also saves the noise you mixed with the speech. 
+#
+# Limitation notes:
+#   This script currently cannot process sounds 
+#      that have special characters like -  in the filename
+#      example: "Sound1-talkerA"
+#      because it interprets the  - as part of a mathematical formula
+#   Also, if your files have any other non-basic characters,
+#      Praat will convert them to underscores upon loading and saving
+#      e.g. Sound(copy) becomes Sound_copy_
+#
+#
+#
+# Maybe other features can be added in the future
+#
+####################################################
+#
+# Start-up form
+form Mix speech and noise
+
+    comment signal to noise ratio
+        real snr 0
+
+    comment How do you want to set the SNR?
+        optionmenu snr_method: 1
+            option maintain speech, change noise
+            option maintain noise, change speech
+            option change both half
+
+    comment noise before and after the speech:
+        real lead_silence_duration 0.4
+        real trail_silence_duration 0.4
+
+    comment circle shift noise?
+        boolean circle_shift_noise 1
+    
+    comment =========================================
+
+    comment How do you want the new sounds to be named?
+        optionmenu sound_newnames: 1
+            option ~sound_name~_snr_`snr`
+            option maintain exact same name
+            option custom sound suffix: (below)
+            option custom sound prefix: (below)
+    sentence optional_name_add _noise
+
+    comment =========================================
+
+    comment Which sounds should be mixed with noise?
+        optionmenu which_sounds: 1
+            option run objects in the list that I will select
+            option run all the sounds in this folder
+
+    sentence optional_folder L:/PraatScripts/Mix_speech_and_noise/audio2
+    comment (write choose_folder if you want to navigate through a window)
+    comment if you're running a whole folder, do you want to save the ouput?
+    boolean save_files 0
+    boolean cleanup_loaded_objects_at_runtime 1
+    sentence new_sub_folder_name _with_noise
+
+    comment You will select the noise from the object list
+    comment (put it in the list before you run this script)
+
+endform
+
+#----------------------------------------------------#
+# Preparation
+call convert_names_from_form
+
+call check_snr_label
+
+#----------------------------------------------------#
+# Using sounds already in the object list
+if mode$ == "run_objects_in_praat_list"
+
+    # this is for Matt to debug easily
+        nocheck selectObject: "Sound s0"
+        nocheck plusObject: "Sound s1"
+        nocheck plusObject: "Sound s3"
+        nocheck plusObject: "Sound s4"
+        nocheck plusObject: "Sound s5"
+    
+    # Ask the user to select the sounds they want to use
+        pause select all sounds to be mixed with noise
+        number_of_selected_sounds = numberOfSelected ("Sound")
+
+    # Assign an object number to each of those sounds
+        for index to number_of_selected_sounds
+            sound'index' = selected("Sound",index)
+        endfor
+
+    # Select the NOISE to be mixed with the sounds
+        call select_the_noise
+
+    # some documentation
+        clearinfo
+        print Processing 'number_of_selected_sounds' sounds in the object list 'newline$'
+        print mixing with noise at 'snr:3' dB SNR 'newline$'
+        print the noise 'noise$' 'newline$'
+        print mixed by 'snr_method_label$'
+
+    # Loop through the sounds
+    # for each selected sound... 
+    for current_sound_index from 1 to number_of_selected_sounds
+        select sound'current_sound_index'
+        speech$ = selected$("Sound")
+
+        call establish_sound_output_name
+
+        @mix_speech_and_noise: speech$, noise$, snr, snr_method$, lead_silence_duration, trail_silence_duration, newname$, circle_shift_noise
+    # End loop through sounds selected from the list
+    endfor
+
+elsif mode$ == "run_sounds_in_folder"
+    # Using sounds in a folder
+
+    # First check to make sure the folder names are specified accurately
+    # and that there are sounds to process
+        call check_folder_info
+
+    # warn the user if they're about to keep loads of obejcts into the window
+        call check_for_large_list
+    
+    # Establish an output path if you are saving files
+        if save_files == 1
+            save_path$ = "'audio_path$'/'new_sub_folder_name$'"
+            createFolder: save_path$
+        endif
+        
+    # Select the NOISE to be mixed with the sounds
+        call select_the_noise
+
+    # some documentation
+        clearinfo
+        print Processing 'num_files' files in 'audio_path$' 'newline$'
+        print mixing with noise at 'snr:3' dB SNR 'newline$'
+        print the noise 'noise$' 'newline$'
+        print mixed by 'snr_method_label$'
+
+
+    # Loop through the folder
+        for file_index from 1 to num_files
+            select Strings fileList
+            filename$ = Get string: file_index
+            Read from file: "'audio_path$'/'filename$'"
+            speech$ = selected$("Sound")
+
+            call establish_sound_output_name
+
+            @mix_speech_and_noise: speech$, noise$, snr, snr_method$, lead_silence_duration, trail_silence_duration, newname$, circle_shift_noise
+
+            if save_files == 1
+                select Sound 'newname$'
+                Save as WAV file: "'audio_path$'/'new_sub_folder_name$'/'newname$'.wav"
+            endif
+
+            if cleanup_loaded_objects_at_runtime == 1
+                select Sound 'newname$'
+                Remove
+            endif
+
+        # end loop through sounds
+        endfor
+
+        # save the documentation
+        if save_files == 1
+            call save_info_window
+            call save_noise_file
+        endif
+
+
+# End conditional on if you are running sounds in a folder
+endif
+
+#
+#
+##
+###
+#####
+########
+#############
+#####################
+##################################
+#######################################################
+#
+# MAIN PROCEDURE
+#
+procedure mix_speech_and_noise .speech$ .noise$ .snr .snr_method$ .lead_silence_duration .trail_silence_duration .newname$ .circle_shift_noise
+    
+    # Check input params
+    call mix_speech_and_noise_check_params
+
+    #----------------------------------------------------#
+    # Basic info about the speech input
+        select Sound '.speech$'
+        .original_speech_dB = Get intensity (dB)
+        .original_full_duration = Get total duration
+
+    # Get the intensity of the parts other than the leading & trailing silence
+        call get_dB_exclude_leading_trailing_silence '.speech$' 0
+            .speech_content_dB = get_dB_exclude_leading_trailing_silence.dB
+
+    #----------------------------------------------------#
+    # Extract the speech, excluding the leading & trailing silence
+        select Sound '.speech$'
+        Extract part: get_dB_exclude_leading_trailing_silence.content_start_time, get_dB_exclude_leading_trailing_silence.content_end_time, "rectangular", 1, "no"
+        Rename... '.speech$'_center
+
+        .speech_content_duration = Get total duration
+
+    #----------------------------------------------------#
+    # Extract part of noise to use
+        duration_noise_needed = .speech_content_duration + .lead_silence_duration+ .trail_silence_duration
+        select Sound '.noise$'
+        noise_duration = Get total duration
+
+        # If it's not long enough,
+        # replicate until it's the duration you need
+        # but first, copy it in its original form
+            if noise_duration < duration_noise_needed
+                    select Sound 'noise$'
+                    Copy... '.noise$'_extended
+                    noise$ = selected$("Sound")
+
+                while noise_duration < duration_noise_needed
+                    call replicate_in_place 'noise$'
+
+                    select Sound 'noise$'
+                    noise_duration = Get total duration
+                endwhile
+            endif
+
+        # Circle shift the noise to randomize its starting point
+        if .circle_shift_noise == 1
+            # circle shift the noise
+            select Sound '.noise$'
+            num_noise_samples = Get number of samples
+            samples_to_shift = randomInteger (1, (num_noise_samples - 50))
+            call circle_shift '.noise$' samples_to_shift '.noise$'_shifted
+
+            select Sound '.noise$'_shifted
+        endif
+
+        # Extract the amount of noise needed to mask the speech 
+        # (plus lead & trail time)
+            Extract part: 0, duration_noise_needed, "rectangular", 1, "no"
+            Rename... noise_extracted
+
+        # Get intensity of that extracted part 
+        # (not the whole noise, because the extract part might be different)
+            .extracted_noise_dB = Get intensity (dB)
+        
+        # Cleanup
+            if circle_shift_noise == 1
+                # Remove the latest temporary noise
+                    select Sound '.noise$'_shifted
+                    Remove
+            endif
+    
+    #----------------------------------------------------#
+    # Set target intensity for speech and noise 
+        if snr_method$ == "change_noise"
+            .target_intensity_speech = .speech_content_dB
+            .target_intensity_noise = .target_intensity_speech - .snr
+
+        elsif snr_method$ == "change_speech"
+            .target_intensity_noise = .extracted_noise_dB
+            .target_intensity_speech = .target_intensity_noise + .snr
+        
+        elsif snr_method$ == "change_both_half"
+            .target_intensity_noise = .speech_content_dB - (.snr/2)
+            .target_intensity_speech = .speech_content_dB + (.snr/2)
+        
+        endif
+
+    # Scale the two components
+        select Sound noise_extracted
+        Scale intensity... .target_intensity_noise
+
+        select Sound '.speech$'_center
+        Scale intensity... .target_intensity_speech
+
+        # add leading and trailing silence to speech
+        # after its intensity has been set
+        call add_silence_buffer '.speech$'_center .lead_silence_duration .trail_silence_duration
+
+    #----------------------------------------------------#
+    # Blend the speech and noise
+        if inspect_speech_and_noise_components == 1
+            pause inspect noise_extracted and '.speech$'_center_silence_buffered
+        endif
+
+        select Sound noise_extracted
+        Copy... '.newname$'
+        object_name_to_add$ = "Sound_'.speech$'_center_silence_buffered"
+        #Formula... self[col] + 'object_name_to_add$'[col]
+        Formula: "self[col] + 'object_name_to_add$'[col]"
+
+    #----------------------------------------------------#
+    # Cleanup
+        selectObject: "Sound '.speech$'_center"
+        plusObject: "Sound '.speech$'_center_silence_buffered"
+        plusObject: "Sound noise_extracted"
+        Remove
+
+    # Return with the new sound selected
+        select Sound '.newname$'
+endproc
+#
+#
+##
+###
+#####
+########
+#############
+#####################
+##################################
+#######################################################
+#
+# sub-procedures
+#
+#######################################################
+##################################
+#####################
+#############
+########
+#####
+###
+##
+#
+#
+
+procedure add_silence_buffer .name$ .lead_silence_duration .trail_silence_duration
+    select Sound '.name$'
+    .samplerate = Get sampling frequency
+
+    # Leading silence
+        if .lead_silence_duration > 0
+            Create Sound from formula: "silence_onset", 1, 0, .lead_silence_duration, .samplerate, "0"
+        endif
+        selectObject: "Sound '.name$'"
+
+    # Position the target speech next in the object list
+        Copy: "temp_speech"
+
+    # Trailing silence
+        if .trail_silence_duration > 0
+            Create Sound from formula: "silence_offset", 1, 0, .trail_silence_duration, .samplerate, "0"
+        endif
+
+    # Sequence together
+        nocheck selectObject: null
+        if .lead_silence_duration > 0
+            plusObject: "Sound silence_onset"
+        endif
+        plusObject: "Sound temp_speech"
+        if .trail_silence_duration > 0
+            plusObject: "Sound silence_offset"
+        endif
+        Concatenate
+        Rename... '.name$'_silence_buffered
+
+    # cleanup
+        selectObject: "Sound temp_speech"
+        if .lead_silence_duration > 0
+            plusObject: "Sound silence_onset"
+        endif
+        if .trail_silence_duration > 0
+            plusObject: "Sound silence_offset"
+        endif
+        Remove
+endproc
+
+procedure replicate_in_place .name$
+    select Sound '.name$'
+    Rename... temp1
+    Copy... temp2
+    select Sound temp1
+    plus Sound temp2
+    # 1 ms cross-fade time to avoid transients
+    Concatenate with overlap... 0.001
+    
+    # Restore original name 
+    # (pseudo "in-place" modification)
+    Rename... '.name$'
+
+    # Cleanup
+        select Sound temp1
+        plus Sound temp2
+        Remove
+    
+    # Have sound selected upon return
+       select Sound '.name$'
+endproc
+
+procedure check_for_large_list
+    if cleanup_loaded_objects_at_runtime == 0
+        if num_files > max_loaded_files_in_list
+                beginPause: "Lots of files to load"
+                comment: "Your folder has 'num_files' files."
+                comment: "And you have chosen to keep them all in the list"
+                comment: "(startup window `cleanup_loaded_objects_at_runtime` box was unhecked)"
+                comment: "This might slow down Praat"
+                comment: "Do you want to proceed, "
+                comment: "Or remove the new sounds form the list as you process the folder?"
+                choice: "cleanup_objects", 1
+                    option: "proceed, leaving all the sounds in the list"
+                    option: "remove the sounds as they are processed"
+            endPause: "stop","continue",2
+
+            if cleanup_objects == 1
+                cleanup_loaded_objects_at_runtime = 0
+            elsif cleanup_objects == 2
+                cleanup_loaded_objects_at_runtime = 1
+            endif
+        endif
+    endif
+endproc
+
+procedure get_dB_exclude_leading_trailing_silence .name$ .criterion
+
+    select Sound '.name$'
+    num_samples = Get number of samples
+
+    # Work forward from the beginning,
+    # advancing until you find signal that isn't silence
+        #
+        # initialize level
+        level_abs = 0
+        sample = 0
+        while level_abs <= .criterion
+            sample = sample + 1
+            level = Get value at sample number: 0, sample
+            level_abs = abs(level)
+        endwhile
+        .first_content_sample = sample
+
+    # Now work backwards from the end
+        sample = num_samples + 1
+        # initialize level again
+        level = 0
+        while level_abs <= .criterion
+            sample = sample - 1
+            level = Get value at sample number: 0, sample
+            level_abs = abs(level)
+        endwhile
+        .last_content_sample = sample
+
+    # Extract the part excluding leading & trailing silence
+        .content_start_time = Get time from sample number: .first_content_sample
+        .content_end_time = Get time from sample number: .last_content_sample
+        select Sound '.name$'
+        Extract part: .content_start_time, .content_end_time, "rectangular", 1, "no"
+        
+    # get the intensity of that part
+        .dB = Get intensity (dB)
+        Remove
+endproc
+
+procedure circle_shift .sound$ .num_samples .newname$
+    select Sound '.sound$'
+    .start_time1 = Get time from sample number: .num_samples
+    .end_time1 = Get total duration
+    .start_time2 = 0
+    .end_time2 = Get time from sample number: .num_samples - 1
+    
+    select Sound '.sound$'
+    Extract part: .start_time1, .end_time1, "rectangular", 1, "no"
+    Rename... part_1
+
+    select Sound '.sound$'
+    Extract part: .start_time2, .end_time2, "rectangular", 1, "no"
+    Rename... part_2
+
+    select Sound part_1
+    plus Sound part_2
+    Concatenate
+    Rename... '.newname$'
+
+    select Sound part_1
+    plus Sound part_2
+    Remove
+endproc
+
+procedure select_the_noise
+    beginPause: "Choose the noise to mix"
+        comment: "Choose the noise you want to mix:"
+        choice: "noise_selection", 1
+            option: "pick a noise from the object list"
+            option: "create speech-shaped noise now"
+            option: "create speech-shaped modulated noise now"
+        
+        comment: "if you want to create noise now,"
+        comment: "you will select a bunch of sounds in the list"
+        comment: "and the script will generate it"
+    clicked = endPause: "stop","continue",2
+
+    if noise_selection == 1
+        pause choose the noise you want to use
+        noise$ = selected$("Sound")
+
+    elsif noise_selection == 2
+        # make 15-second speech-shaped noise
+        call make_SSN new_noise_duration 0
+    elsif noise_selection == 3
+        # make 15-second modulated speech-shaped noise
+        call make_SSN new_noise_duration 1
+    endif
+endproc
+
+procedure mix_speech_and_noise_check_params
+
+    # Check to see if sound exists
+    nocheck selectObject: "Sound 'mix_speech_and_noise.speech$'"
+    if numberOfSelected("Sound") == 0
+        exit PROBLEM: intended speech 'mix_speech_and_noise.speech$' is not in the object list
+    endif
+
+    # Check to see if noise exists
+    nocheck selectObject: "Sound 'mix_speech_and_noise.noise$'"
+    if numberOfSelected("Sound") == 0
+        exit PROBLEM: intended noise 'mix_speech_and_noise.noise$' is not in the object list
+    endif
+
+    # Check to make sure snr is defined
+    temp = mix_speech_and_noise.snr
+    if temp == undefined
+        exit PROBLEM: SNR not defined on call to mix speech and noise
+    endif
+
+    # Check to make sure snr method is a legit choice
+    if mix_speech_and_noise.snr_method$ != "change_noise"
+        if mix_speech_and_noise.snr_method$ != "change_speech"
+            if mix_speech_and_noise.snr_method$ != "change_both_half"
+                exit PROBLEM: SNR method 'mix_speech_and_noise.snr_method$' not available; must use change_speech, change_noise, or change_both_half
+            endif
+        endif
+    endif
+
+    # Check to make sure lead & trail silence is not less than 0
+    temp = mix_speech_and_noise.lead_silence_duration
+    if temp < 0
+        exit PROBLEM: lead_silence_duration 'lead_silence_duration' cannot be less than zero
+    endif
+    temp = mix_speech_and_noise.trail_silence_duration
+    if temp < 0
+        exit PROBLEM: trail_silence_duration 'trail_silence_duration' cannot be less than zero
+    endif
+endproc
+
+procedure check_folder_info
+    # Folder where the current sounds are
+        if optional_folder$ == "choose_folder"
+            # If the user wrote "choose_folder" in the window, 
+            #    then let them click around to select the folder
+            audio_path$ = chooseFolder$: "Choose a folder with all of your sounds"
+        else
+            # use user input
+            audio_path$ = optional_folder$
+        endif
+
+    # List the wav files in that folder
+        Create Strings as file list: "fileList", "'audio_path$'\*.wav"
+        num_files = Get number of strings
+
+    # If it seems like this folder doesn't have enough sounds...
+        if num_files < 2
+            beginPause: "Small number of files"
+                if num_files == 0
+                    comment: "There are no files in the folder you named."
+                elsif num_files == 1
+                    comment: "There is only ONE file in the folder you named."
+                else
+                    comment: "There are only 'num_files' files in the folder you named."
+                endif
+                comment: "'audio_path$'"
+                comment: "Are you sure this is the correct folder?"
+                if optional_folder$ != "choose_folder"
+                    comment: "(was it typed correctly?)"
+                endif
+            clicked = endPause: "Stop","Continue with this folder", 1
+            if clicked == 1
+                exit
+            endif
+        endif
+
+    # If no sub-folder name (blank)
+    if new_sub_folder_name$ == ""
+        beginPause: "No sub-folder named"
+            comment: "Your sub-folder name is blank"
+            comment: "This means that your new files with noise"
+            comment: "will be in the SAME folder as your current sounds."
+            comment: "'audio_path$'"
+
+            comment: "Are you sure you want to do this?"
+
+            # If the user chose to leave the name unchanged
+            # AND save the new sounds in the same folder as the originals,
+            # then the priginals will be irretrievably lost. 
+            # Stop them from doing this. 
+                if sound_newnames == 2
+                    comment: "- - - - - - - - - - - - - - - - - - - - " 
+                    comment: "You have chosen to save the sounds" 
+                    comment: "with the SAME name as the original filename"
+                    comment: "This means that your new files"
+                    comment: "will OVERWRITE your current files"
+                    comment: "This is a bad idea. Don't do it"
+                    comment: "- - - - - - - - - - - - - - - - - - - - " 
+                    comment: ""
+                    comment: "Please go back to the startup window and either:"
+                    comment: "1) Name a sub-folder to save the sounds"
+                    comment: "2) choose a new filename style to distinguish the new output sounds"
+                    clicked = endPause: "oops","OOPS", 2
+                    exit
+                endif
+            # It's a valid folder to work with
+            # this will complete the pause window
+        clicked = endPause: "Stop","Continue with this folder", 1
+
+        # Let the user exit if they want
+        if clicked == 1
+            exit
+        endif
+    endif
+endproc
+
+procedure check_snr_label
+    # warning against SNR in object/filename
+    # when SNR is not an integer
+
+    if floor(snr) == ceiling(snr)
+        snr_is_integer = 1
+    else
+        snr_is_integer = 0
+        # SNR is not an integer
+        # construct a new name for it
+        # that is amenable for object naming and file saving
+        if snr > 0
+            snr_main = floor(snr)
+        elsif snr < 0
+            snr_main = ceiling(snr)
+        endif
+        snr_decimal = snr - snr_main
+        snr_decimal2 = round(100*abs(snr_decimal))
+
+        snr_converted_label$ = "_snr_'snr_main'_'snr_decimal2'"
+    endif
+
+    # if the SNR is not an integer...
+    if snr_is_integer != 1
+        # but you wanted to use the SNR in the output name...
+        if sound_newnames == 1
+            # then verify what you want to do here:
+            beginPause: "SNR not an integer"
+            comment: "WARNING:"
+            comment: "your SNR is not an integer,"
+            comment: "so including it in the filename might get messy."
+            comment: "The soudn name suffix will be changed to this:"
+            comment: "(you can override it by typing over it)"
+            sentence: "optional_suffix", snr_converted_label$
+            clicked = endPause: "stop","continue",2
+                
+            # re-establish the naming scheme 
+            # for output sounds
+                sound_newnames = 5
+                .sound_suffix$ = snr_converted_label$
+        endif
+    endif
+endproc
+
+procedure make_SSN .target_duration .modulated
+    # For Matt to easily debug:
+        nocheck selectObject: "Sound s0"
+        nocheck plusObject: "Sound s1"
+        nocheck plusObject: "Sound s3"
+        nocheck plusObject: "Sound s4"
+        nocheck plusObject: "Sound s5"
+
+    pause select all sounds to combine into speech-shaped noise
+    Concatenate
+    samplerate = Get sampling frequency
+    int = Get intensity (dB)
+    To Ltas... 50
+
+    # Create some white noise and convert to a spectrum
+        Create Sound from formula... noise 1 0 '.target_duration' samplerate  randomGauss(0,0.1)
+        To Spectrum... no
+        select Sound noise
+        Remove
+
+    # Apply LTAS envelope to white noise spectrum 
+        select Spectrum noise
+        Formula... self * 10 ^ (Ltas_chain(x)/20)
+        # convert back to sound
+        To Sound
+        Scale intensity... 'int'
+        Rename... speech_shaped_noise
+        noise$ = selected$("Sound")
+
+    # apply modulation envelope if desired
+    if .modulated == 1
+        # get intensity envelope from the concatenated sounds
+        selectObject: "Sound chain"
+        .modulated_duration = Get total duration
+        To Intensity: 100, 0, "yes"
+        Down to IntensityTier
+        selectObject: "Sound speech_shaped_noise"
+        plusObject: "IntensityTier chain"
+        Multiply: "yes"
+        Rename: "temp"
+
+        # only extract as much duration as the intensity envelope
+        # that was fed into it
+        # (otherwise you get a big silent gap at the end)
+            Extract part: 0, .modulated_duration, "rectangular", 1, "no"
+            Rename: "speech_shaped_modulated_noise"
+            Scale intensity: int
+            noise$ = selected$("Sound")
+
+        # cleanup
+            select Intensity chain
+            plus IntensityTier chain
+            plus Sound temp
+            Remove
+    endif
+
+    # evaluate noise duration
+        select Sound 'noise$'
+        .noise_duration = Get total duration
+
+        # if it's not long enough,
+        # replicate until it's the duration you need
+        # but first, copy it in its original form
+            if .noise_duration < .target_duration
+                    select Sound 'noise$'
+                    Copy... 'noise$'_orig_duration
+
+                while .noise_duration < .target_duration
+                    call replicate_in_place 'noise$'
+                    select Sound 'noise$'
+                    .noise_duration = Get total duration
+                endwhile
+            endif
+
+    # Cleanup
+        select Ltas chain
+        plus Spectrum noise
+        plus Sound chain
+        Remove
+endproc
+
+procedure save_noise_file
+    noise_save_path$ = "'audio_path$'/'new_sub_folder_name$'/noise_used_in_mix"
+    createFolder: noise_save_path$
+    select Sound 'noise$'
+    Save as WAV file: "'noise_save_path$'/'noise$'.wav"
+endproc
+
+procedure save_info_window
+    info_filename$ = "'audio_path$'/'new_sub_folder_name$'/script_info.txt"
+    
+    # delete the file if it's already there
+        deleteFile: info_filename$
+    # create the file
+        appendFile (info_filename$, info$ ())
+endproc
+
+procedure establish_sound_output_name
+    # Create a sound output name according to user input
+    if sound_newnames == 1
+        newname$ = "'speech$'_snr_'snr'"
+    elsif sound_newnames == 2
+        newname$ = "'speech$'"
+    elsif sound_newnames == 3
+        newname$ = "'speech$''optional_name_add$'"
+    elsif sound_newnames == 4
+        newname$ = "'optional_name_add$''speech$'"
+    elsif sound_newnames == 5
+        # created at runtime to accommodate SNR non-integers
+        newname$ = "'speech$''check_snr_label.sound_suffix$'"
+    endif
+endproc
+
+procedure convert_names_from_form
+    # Read the output from the start-up form,
+    # establish some variable levels
+
+    if snr_method == 1
+        # descriptive label for documentation
+        snr_method_label$ = "maintain speech, change noise"
+        # shorter label for evaluating in the script
+        snr_method$ = "change_noise"
+    elsif snr_method == 2
+        snr_method_label$ = "maintain noise, change speech"
+        snr_method$ = "change_speech"
+    elsif snr_method == 3
+        snr_method_label$ = "change both half"
+        snr_method$ = "change_both_half"
+    endif
+
+    if which_sounds == 1
+        mode$ = "run_objects_in_praat_list"
+    elsif which_sounds == 2
+        mode$ = "run_sounds_in_folder"
+    else
+        exit choose which sounds you want to run (in list / in folder)
+    endif
+        
+    # initialize
+        replicated_noise = 0
+
+    # upper limit to the number of files allowed in the list
+    # before the user is offered the chance to revise their choice
+    # to clean up the list as it loops through the folder of sounds
+        max_loaded_files_in_list = 50
+    
+    # if you want to intercept the speech and noise before they are added
+    # (for debugging)
+    inspect_speech_and_noise_components = 0
+
+    # a default duration of noise, if you are creating it at runtime
+    # this just needs to be sufficiently longer than the longest speech stimulus
+    # that you want to mix with noise,
+    # and longer still, if you want it to have variability in starting point
+    # since test sentences are rarely mor than 5 seconds long, 
+    # this should be sufficient for *most* cases
+    new_noise_duration = 15
+endproc

@@ -756,7 +756,13 @@ procedure make_SSN .target_duration .modulated
         # only extract as much duration as the intensity envelope
         # that was fed into it
         # (otherwise you get a big silent gap at the end)
-            Extract part: 0, .modulated_duration, "rectangular", 1, "no"
+            if .target_duration < .modulated_duration
+                mod_extract_duration = .target_duration
+            else
+                mod_extract_duration = .modulated_duration
+            endif
+
+            Extract part: 0, mod_extract_duration, "rectangular", 1, "no"
             Rename: "speech_shaped_modulated_noise"
             Scale intensity: int
             noise$ = selected$("Sound")

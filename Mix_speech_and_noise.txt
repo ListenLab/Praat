@@ -140,8 +140,11 @@ if mode$ == "run_objects_in_praat_list"
         clearinfo
         print Processing 'number_of_selected_sounds' sounds in the object list 'newline$'
         print mixing with noise at 'snr:3' dB SNR 'newline$'
-        print the noise 'noise$' 'newline$'
         print mixed by 'snr_method_label$'
+        print using the noise 'noise$' 'newline$'
+        if replicated_noise == 1
+            print ... which was replicated to cover the necessary duration 'newline$'
+        endif
 
     # Loop through the sounds
     # for each selected sound... 
@@ -178,8 +181,11 @@ elsif mode$ == "run_sounds_in_folder"
         clearinfo
         print Processing 'num_files' files in 'audio_path$' 'newline$'
         print mixing with noise at 'snr:3' dB SNR 'newline$'
-        print the noise 'noise$' 'newline$'
         print mixed by 'snr_method_label$'
+        print using the noise 'noise$' 'newline$'
+        if replicated_noise == 1
+            print ... which was replicated to cover the necessary duration 'newline$'
+        endif
 
 
     # Loop through the folder

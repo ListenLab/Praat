@@ -872,7 +872,7 @@ procedure convert_names_from_form
     # this just needs to be sufficiently longer than the longest speech stimulus
     # that you want to mix with noise,
     # and longer still, if you want it to have variability in starting point
-    # since test sentences are rarely mor than 5 seconds long, 
+    # since test sentences are rarely more than 5 seconds long, 
     # this should be sufficient for *most* cases
     new_noise_duration = 15
 endproc

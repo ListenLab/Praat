@@ -181,7 +181,7 @@ elsif mode$ == "run_sounds_in_folder"
         clearinfo
         print Processing 'num_files' files in 'audio_path$' 'newline$'
         print mixing with noise at 'snr:3' dB SNR 'newline$'
-        print mixed by 'snr_method_label$'
+        print mixed by 'snr_method_label$''newline$'
         print using the noise 'noise$' 'newline$'
         if replicated_noise == 1
             print ... which was replicated to cover the necessary duration 'newline$'

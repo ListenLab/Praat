@@ -600,7 +600,7 @@ endproc
 
 procedure check_folder_info
     # Folder where the current sounds are
-            if current_folder$ == "choose_folder" or current_folder$ == "choose folder"
+            if optional_folder$ == "choose_folder" or optional_folder$ == "choose folder"
 
             # If the user wrote "choose_folder" in the window, 
             #    then let them click around to select the folder

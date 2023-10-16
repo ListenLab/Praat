@@ -53,6 +53,10 @@
 #      Praat will convert them to underscores upon loading and saving
 #      e.g. Sound(copy) becomes Sound_copy_
 #
+# version 7: update to correct an error in variable names,
+# and corrected for the situation of different sample rates
+# in the target and the noise
+# also added check to make sure speech and noise have the same sampling frequency
 #
 #
 # Maybe other features can be added in the future
@@ -596,6 +600,23 @@ procedure mix_speech_and_noise_check_params
     if temp < 0
         exit PROBLEM: trail_silence_duration 'trail_silence_duration' cannot be less than zero
     endif
+
+    # check to make sure speech and noise have the same sampling frequency
+        selectObject: "Sound 'mix_speech_and_noise.speech$'"
+        .speech_samplerate = Get sampling frequency
+        selectObject: "Sound 'mix_speech_and_noise.noise$'"
+        .noise_samplerate = Get sampling frequency
+
+        # if they are not equal, resample the noise
+        if .noise_samplerate != .speech_samplerate
+            selectObject: "Sound 'mix_speech_and_noise.noise$'"
+            Copy... 'mix_speech_and_noise.noise$'_original
+            Resample... '.speech_samplerate' 30
+
+            # re-establish the name that will be called later
+            Rename... 'mix_speech_and_noise.noise$'
+            print NOTE: Noise 'mix_speech_and_noise.noise$' was resampled to match the samplerate of the target sound
+        endif
 endproc
 
 procedure check_folder_info

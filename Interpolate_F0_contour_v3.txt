@@ -20,6 +20,8 @@
 
 form Enter settings for pitch interpolation
 
+	comment F0 *analysis* settings
+	comment (analysis of the current F0)
 	real minpitch 70
 	real maxpitch 400
 
@@ -255,5 +257,5 @@ procedure initialize_pitch_settings
 	# based on Paul Boersma (1993): "Accurate short-term analysis of the 
 	#	fundamental frequency and the harmonics-to-noise ratio 
 	#	of a sampled sound." Proceedings of the Institute of 
-	#	Phonetic Sciences 17: 97–110. University of Amsterdam.
+	#	Phonetic Sciences 17: 97â€“110. University of Amsterdam.
 endproc

@@ -1,0 +1,259 @@
+######################################################
+######################################################
+# Interpolate pitch contours of two sounds
+#
+# Note: the sounds have to have the same timing landmarks
+# i.e. two sounds that differ *only* by F0
+# not two different utterances
+#
+# tip: first make a pitch manipulation of one sound,
+# then run this script to interpolate
+# between the original and the manipulated person
+#
+# demo mode: use with sample sounds Room_A and Room_B
+#
+#
+#  Matthew Winn
+#  December 2021
+######################################################
+######################################################
+
+form Enter settings for pitch interpolation
+
+	real minpitch 70
+	real maxpitch 400
+
+	natural number_of_steps 5
+
+		real pitch_timestep 0.01
+
+	optionmenu interpolation_method 2
+		option linear
+		option log
+
+	boolean remove_pitch_tiers 1
+
+endform
+
+######################################################
+######################################################
+# demo mode
+	nowarn select Sound Room_A
+	nowarn plus Sound Room_B
+
+pause select the two sounds that you want to interpolate
+	name1$ = selected$("Sound",1)
+	name2$ = selected$("Sound",2)
+
+# pitch analysis
+	call initialize_pitch_settings
+	selectObject: "Sound 'name1$'"
+	plusObject: "Sound 'name2$'"
+	To Pitch (ac): 0, minpitch, 15, "no", 0.03, 0.45, 0.01, 0.35, 0.14, maxpitch
+
+# make manipulable object
+	selectObject: "Sound 'name1$'"
+	To Manipulation: pitch_timestep, minpitch, maxpitch
+
+# extract the pitch tier
+	selectObject: "Manipulation 'name1$'"
+	Extract pitch tier
+	num_pitch_points = Get number of points
+	time_of_first_point = Get time from index: 1
+	time_of_last_point = Get time from index: num_pitch_points
+	num_pitch_timesteps = (time_of_last_point - time_of_first_point)/pitch_timestep
+	num_pitch_timesteps = round(num_pitch_timesteps)
+	
+	duration = Get end time
+
+# Initialize the table of F0 values
+	Create Table with column names: "F0_'name1$'_'name2$'_'interpolation_method$'", 0, "sound1 sound2 step_number time f0_1 f0_2 f0_interp method"
+	# initialize row number
+	row_number = 0
+
+
+for step_number from 1 to number_of_steps
+
+	selectObject: "PitchTier 'name1$'"
+	Copy: "pitch_step_'step_number'"
+	Remove points between: 0, duration
+
+	
+	for pitch_time_index from 1 to num_pitch_timesteps
+		# get the time point from the original pitch tier
+			select PitchTier 'name1$'
+			# instead of drawing time points from PitchTier,
+			# do it analytically, so you don't skip over the unvoiced parts
+			time = time_of_first_point + (pitch_time_index-1)*pitch_timestep
+
+		# get the F0 values from each sound at that time point
+			selectObject: "Pitch 'name1$'"
+			f0_1 = Get value at time: time, "Hertz", "linear"
+			
+
+			selectObject: "Pitch 'name2$'"
+			f0_2 = Get value at time: time, "Hertz", "linear"
+
+		# interpolate
+		   if interpolation_method$ = "linear"
+			f0_interp = f0_1 + ((f0_2 - f0_1) * (step_number-1)/(number_of_steps-1))
+		   elsif interpolation_method$ = "log"
+			f0_interp = f0_1 * 10^(log10(f0_2/f0_1) * (step_number-1)/(number_of_steps-1) )
+		   else
+			exit Interpolation method not recognized. Try "linear" or "log"
+		   endif
+
+		# print values to table
+			   select Table F0_'name1$'_'name2$'_'interpolation_method$'
+			   Append row
+			   row_number = row_number + 1
+
+			   Set string value: row_number, "sound1", name1$
+			   Set string value: row_number, "sound2", name2$
+			   Set numeric value: row_number, "step_number", step_number
+			   
+			   Set numeric value: row_number, "time", 'time:3'
+			   
+			   if f0_1 != undefined
+				Set numeric value: row_number, "f0_1", 'f0_1:1'
+			   else
+			   	Set string value: row_number, "f0_1", "NA"
+			   endif
+			   if f0_2 != undefined
+			   	Set numeric value: row_number, "f0_2", 'f0_2:1'
+			   else
+			   	Set string value: row_number, "f0_2", "NA"
+			   endif
+			   if f0_interp != undefined
+			   	Set numeric value: row_number, "f0_interp", 'f0_interp:1'
+			   else
+			   	Set string value: row_number, "f0_interp", "NA"
+			   endif
+			   Set string value: row_number, "method", interpolation_method$
+			   
+
+
+		selectObject: "PitchTier pitch_step_'step_number'"
+		if f0_interp != undefined
+			Add point: time, f0_interp
+		endif
+	# end loop through time points
+	endfor
+
+
+	# impose on the manipulation object and resynthesize
+		selectObject: "Manipulation 'name1$'"
+		plusObject: "PitchTier pitch_step_'step_number'"
+		Replace pitch tier
+		selectObject: "Manipulation 'name1$'"
+		Get resynthesis (overlap-add)
+		Rename: "'name1$'_'name2$'_F0_'step_number'"
+	
+	if remove_pitch_tiers == 1
+		select PitchTier pitch_step_'step_number'
+		Remove
+	endif
+	
+endfor
+
+# cleanup
+	select Pitch 'name1$'
+	plus Pitch 'name2$'
+	plus Manipulation 'name1$'
+	plus PitchTier 'name1$'
+	Remove
+
+# draw the contours
+	call draw_contours
+
+
+# select the table
+	select Table F0_'name1$'_'name2$'_'interpolation_method$'
+
+# End!
+
+#
+##
+###
+#####
+########
+#############
+# Procedures
+#############
+
+procedure draw_contours
+	Erase all
+	Line width: 2
+
+	# get y axis limits
+	call round_to minpitch 25 down
+	ylim_lower = round_to.output
+
+	call round_to maxpitch 25 up
+	ylim_upper = round_to.output
+	
+	call round_to duration 0.2 up
+	xlim_upper = round_to.output
+
+	# make the pitch objects
+	selectObject: "Sound 'name1$'_'name2$'_F0_1"
+	   for step from 1 to number_of_steps
+	     plusObject: "Sound 'name1$'_'name2$'_F0_'step'"
+	   endfor
+	To Pitch (ac): 0, minpitch, max_num_candidates, "yes", silence_threshold, voicing_threshold, octave_cost, octave_jump_cost, voiced_unvoiced_cost, maxpitch
+	
+	# draw the first step in the continuum in blue
+	Blue
+	Draw: 0, xlim_upper, ylim_lower, ylim_upper, "yes"
+
+	# draw the rest of the steps gradually changing to red
+	for step_number from 2 to number_of_steps
+		# create a color gradient between blue & red, based on the step number
+		redproportion = ('step_number'-1)/('number_of_steps'-1)
+			# create rgb blend (starts at blue, ends at red)
+			r = redproportion
+			g = 0.0
+			b = 1-redproportion
+		   Colour... {'r','g','b'}
+
+		selectObject: "Pitch 'name1$'_'name2$'_F0_'step_number'"
+		# draw without garnish
+		Draw: 0, xlim_upper, ylim_lower, ylim_upper, "no"
+	endfor
+
+	# cleanup
+	selectObject: "Pitch 'name1$'_'name2$'_F0_1"
+	for step from 1 to number_of_steps
+	plusObject: "Pitch 'name1$'_'name2$'_F0_'step'"
+	endfor
+	Remove
+
+endproc
+
+procedure round_to .number .nearest .direction$
+	if .direction$ == "up"
+		.output = ceiling(.number/.nearest) * .nearest
+	elsif .direction$ == "down"
+		.output = floor(.number/.nearest) * .nearest
+	endif
+endproc
+
+procedure initialize_pitch_settings
+	# pitch autocorrelation settings
+	# auto timestep
+	timestep = 0
+	max_num_candidates = 15
+	silence_threshold = 0.03
+	voicing_threshold = 0.45
+	octave_cost = 0.01
+	octave_jump_cost = 0.35
+	voiced_unvoiced_cost = 0.14
+
+	#-----------------------------------------------------------#
+	# pitch settings info from Praat documentation:
+	#  https://www.fon.hum.uva.nl/praat/manual/Sound__To_Pitch__ac____.html
+	# based on Paul Boersma (1993): "Accurate short-term analysis of the 
+	#	fundamental frequency and the harmonics-to-noise ratio 
+	#	of a sampled sound." Proceedings of the Institute of 
+	#	Phonetic Sciences 17: 97–110. University of Amsterdam.
+endproc

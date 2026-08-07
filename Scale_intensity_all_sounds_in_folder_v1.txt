@@ -125,7 +125,7 @@ procedure saveSounds
 	filedelete 'soundDir$'/'outFile$'
 
    # creates simple header		
-	fileappend Step 'tab$' Duration 'tab$' 'newline$'
+	#fileappend Step 'tab$' Duration 'tab$' 'newline$'
 
    # make a list of each sound in the directory
    for thisFile to numberOfFiles
